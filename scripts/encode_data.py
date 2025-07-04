@@ -4,39 +4,18 @@ import json
 import numpy as np
 import pandas as pd
 
-from common import map_hg
+from common import DATA_DIR, map_hg, parse_age_band
 from mappings import pattern_map, going_map, sex_rest_map, sex_map
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-DATA_DIR = SCRIPT_DIR.parent / 'data' / 'raw'
-
-
-
 def save_mapping(mapping: dict, filename: str):
-    mapping_path = SCRIPT_DIR.parent / 'data' / 'processed' / filename
+    mapping_path = DATA_DIR / 'mapping' / filename
     mapping_path.parent.mkdir(parents=True, exist_ok=True)
     with open(mapping_path, 'w') as f:
         json.dump(mapping, f, indent=4)
 
-def parse_age_band(age_band):
-    if pd.isna(age_band):
-        return np.nan, np.nan
-    age_band = age_band.replace('yo', '')
-    if '+' in age_band:
-        min_age = int(age_band.replace('+', ''))
-        max_age = np.nan
-    elif '-' in age_band:
-        parts = age_band.split('-')
-        min_age = int(parts[0])
-        max_age = int(parts[1])
-    else:
-        min_age = max_age = int(age_band)
-    return min_age, max_age
-
-
-
-csv_files = list(DATA_DIR.rglob('*.csv'))
+RAW_DATA_DIR = DATA_DIR / 'training' / 'raw'
+csv_files = list(RAW_DATA_DIR.rglob('*.csv'))
 
 dfs = []
 for csv_file in csv_files:
@@ -54,7 +33,7 @@ merged_df['month_cos'] = np.cos(2 * np.pi * merged_df['month'] / 12)
 merged_df.drop(columns=['date', 'month', 'region'], inplace=True)
 
 # course, course_id, dist, dist_f, dist_m
-merged_df['track_id'] = merged_df['course'] + '_' + merged_df['dist'].astype(str)
+merged_df['track_id'] = merged_df['course'] + '_' + merged_df['dist_f'].astype(str)
 unique_tracks = merged_df['track_id'].unique()
 track_to_id = {track: idx for idx, track in enumerate(unique_tracks)}
 merged_df['track_id'] = merged_df['track_id'].map(track_to_id).astype(int)
@@ -96,7 +75,7 @@ merged_df['win'] = (merged_df['pos'] == '1').astype(int)
 merged_df.drop(columns=['num', 'pos'], inplace=True)
 
 # ovr_btn, btn
-merged_df.drop(columns=['btn'], inplace=True)
+merged_df.drop(columns=['ovr_btn', 'btn'], inplace=True)
 
 # horse_id, horse, age, sex
 
@@ -111,8 +90,18 @@ merged_df['hg'] = merged_df['hg'].apply(map_hg)
 merged_df.drop(columns=['time', 'secs'], inplace=True)
 
 # dec
+merged_df.drop(columns=['dec'], inplace=True)
 
 # jockey_id, jockey, trainer_id, trainer, owner_id, owner
+owner_to_id = {}
+for _, row in merged_df[['owner', 'owner_id']].dropna().iterrows():
+    owner_name = row['owner']
+    owner_id = int(row['owner_id'])
+    if owner_name not in owner_to_id:
+        owner_to_id[owner_name] = owner_id
+
+save_mapping(owner_to_id, 'owner_mapping.json')
+
 merged_df.drop(columns=['jockey', 'trainer', 'owner'], inplace=True)
 
 # prize
@@ -148,6 +137,6 @@ merged_df.drop(columns=['sire_id', 'dam_id', 'damsire_id'], inplace=True)
 merged_df.drop(columns=['comment'], inplace=True)
 
 # Save merged + encoded
-output_file = SCRIPT_DIR.parent / 'data' / 'processed' / 'all_merged_encoded.csv'
+output_file = DATA_DIR / 'training' / 'processed' / 'encoded.csv'
 output_file.parent.mkdir(parents=True, exist_ok=True)
 merged_df.to_csv(output_file, index=False)
