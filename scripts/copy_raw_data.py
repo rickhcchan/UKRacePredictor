@@ -5,12 +5,12 @@ from common import DATA_DIR, RPSCRAPE_DIR
 from pathlib import Path
 
 def copy_race_data():
-    SOURCE_BASE = RPSCRAPE_DIR / 'data' / 'regions' / 'gb'
-    DEST_BASE = DATA_DIR / 'data' / 'training' / 'raw'
+    SOURCE_BASE_DIR = RPSCRAPE_DIR / 'data' / 'regions' / 'gb'
+    DEST_BASE_DIR = DATA_DIR / 'training' / 'raw'
     race_types = ['flat', 'jumps']
     for race_type in race_types:
-        source_dir = SOURCE_BASE / race_type
-        dest_dir = DEST_BASE / race_type
+        source_dir = SOURCE_BASE_DIR / race_type
+        dest_dir = DEST_BASE_DIR / race_type
         dest_dir.mkdir(parents=True, exist_ok=True)
         files_copied = 0
         for csv_file in source_dir.glob('*.csv'):
