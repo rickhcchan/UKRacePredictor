@@ -3,10 +3,32 @@
 import json
 import numpy as np
 import pandas as pd
+from datetime import datetime
+from collections import defaultdict
 
 from common import DATA_DIR, map_hg, parse_age_band
 from mappings import pattern_map, going_map, sex_map
 from pathlib import Path
+
+def parse_race_time(date_str, time_str):
+    try:
+        date_part = datetime.strptime(date_str, '%Y-%m-%d').date()
+        time_part = datetime.strptime(time_str, '%H:%M').time()
+        hour = time_part.hour
+        if hour in [11, 12]:
+            final_hour = hour
+        else:
+            final_hour = hour + 12 if hour <= 10 else hour
+        return datetime.combine(date_part, time_part.replace(hour=final_hour))
+    except:
+        return datetime.strptime(date_str, '%Y-%m-%d')
+
+def calculate_historical_win_pct(historical_records):
+    total_races = len(historical_records)
+    if total_races == 0:
+        return -1
+    wins = sum(1 for record in historical_records if record['win'])
+    return (wins / total_races) * 100
 
 def save_mapping(mapping: dict, filename: str):
     mapping_path = DATA_DIR / 'mapping' / filename
@@ -23,6 +45,47 @@ for csv_file in csv_files:
     dfs.append(df)
 
 merged_df = pd.concat(dfs, ignore_index=True)
+
+merged_df['datetime'] = merged_df.apply(
+    lambda row: parse_race_time(row['date'], row['off']), axis=1
+)
+merged_df = merged_df.sort_values(['datetime', 'race_id']).reset_index(drop=True)
+
+horse_history = defaultdict(list)
+win_pct_columns = [
+    'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct'
+]
+
+for col in win_pct_columns:
+    merged_df[col] = -1
+
+for idx, row in merged_df.iterrows():   
+    horse_id = row['horse_id']
+    course = row['course']
+    going = row['going']
+    dist_f = row['dist_f']
+    win = (row['pos'] == '1')
+    
+    horse_records = horse_history[horse_id]
+    
+    course_records = [r for r in horse_records if r['course'] == course]
+    merged_df.at[idx, 'horse_course_win_pct'] = calculate_historical_win_pct(course_records)
+    
+    distance_records = [r for r in horse_records if r['dist_f'] == dist_f]
+    merged_df.at[idx, 'horse_distance_win_pct'] = calculate_historical_win_pct(distance_records)
+    
+    going_records = [r for r in horse_records if r['going'] == going]
+    merged_df.at[idx, 'horse_going_win_pct'] = calculate_historical_win_pct(going_records)
+    
+    race_record = {
+        'course': course,
+        'going': going, 
+        'dist_f': dist_f,
+        'win': win,
+        'datetime': row['datetime']
+    }
+    
+    horse_history[horse_id].append(race_record)
 
 # date, region
 merged_df['date'] = pd.to_datetime(merged_df['date'], errors='coerce')
@@ -131,10 +194,9 @@ save_mapping(damsire_to_id, 'damsire_mapping.json')
 
 merged_df.drop(columns=['sire_id', 'dam_id', 'damsire_id'], inplace=True, errors='ignore')
 
-# comment
-merged_df.drop(columns=['comment'], inplace=True, errors='ignore')
+# comment, datetime
+merged_df.drop(columns=['comment', 'datetime'], inplace=True, errors='ignore')
 
-# Save merged + encoded
 output_file = DATA_DIR / 'training' / 'processed' / 'encoded.csv'
 output_file.parent.mkdir(parents=True, exist_ok=True)
 merged_df.to_csv(output_file, index=False)
