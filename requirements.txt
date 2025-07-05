@@ -1,0 +1,15 @@
+# Machine Learning
+lightgbm>=4.0.0
+xgboost>=2.0.0
+scikit-learn>=1.3.0
+
+# Data Processing  
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Model Persistence
+joblib>=1.3.0
+
+# Visualization (optional for model analysis)
+matplotlib>=3.7.0
+seaborn>=0.12.0
