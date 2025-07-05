@@ -6,7 +6,7 @@ from pathlib import Path
 
 def copy_race_data():
     SOURCE_BASE_DIR = RPSCRAPE_DIR / 'data' / 'regions' / 'gb'
-    DEST_BASE_DIR = DATA_DIR / 'training' / 'input'
+    DEST_BASE_DIR = DATA_DIR / 'training' / 'raw'
     race_types = ['flat', 'jumps']
     for race_type in race_types:
         source_dir = SOURCE_BASE_DIR / race_type
