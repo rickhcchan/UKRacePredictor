@@ -17,13 +17,6 @@ going_map = {
     'Soft': 5
 }
 
-sex_rest_map = {
-    'F': 1,
-    'M': 2,
-    'C & G': 3,
-    'F & M': 4
-}
-
 sex_map = {
     'G': 1,
     'F': 2,

@@ -46,6 +46,14 @@ with open(DATA_DIR / 'mapping' / 'track_mapping.json') as f:
 with open(racecard_file, encoding='utf-8') as f:
     racecard_data = json.load(f)
 
+def safe_mapping_lookup(mapping, name_with_region, name_only):
+    if name_with_region in mapping:
+        return mapping[name_with_region]
+    elif name_only in mapping:
+        return mapping[name_only]
+    else:
+        return -1
+
 rows = []
 
 courses = racecard_data['GB']
@@ -77,15 +85,6 @@ for course_name, races in courses.items():
                 damsire_full = f"{damsire_name} ({damsire_region})"
             else:
                 damsire_full = damsire_name
-
-            # Safe mapping lookup: try with region first, then without region, finally -1
-            def safe_mapping_lookup(mapping, name_with_region, name_only):
-                if name_with_region in mapping:
-                    return mapping[name_with_region]
-                elif name_only in mapping:
-                    return mapping[name_only]
-                else:
-                    return -1
 
             row = {
                 'race_id': int(race_info.get('race_id')),
