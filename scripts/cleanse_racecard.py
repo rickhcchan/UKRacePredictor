@@ -125,7 +125,7 @@ df['month'] = df['date'].dt.month
 df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
 df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
 
-df['track_id'] = (df['course'] + '_' + df['dist_f'].astype(str) + 'f').map(track_mapping).fillna(-1).astype(int)
+df['track_id'] = (df['course'] + '_' + df['dist_f'].apply(lambda x: str(int(x)) if x == int(x) else str(x)) + 'f').map(track_mapping).fillna(-1).astype(int)
 
 df['rating_max'] = df['rating_band'].str.extract(r'-(\d+)').astype(float)
 
