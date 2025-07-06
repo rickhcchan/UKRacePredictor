@@ -52,31 +52,54 @@ merged_df['datetime'] = merged_df.apply(
 merged_df = merged_df.sort_values(['datetime', 'race_id']).reset_index(drop=True)
 
 horse_history = defaultdict(list)
+jockey_history = defaultdict(list)
+trainer_history = defaultdict(list)
+
 win_pct_columns = [
-    'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct'
+    'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct',
+    'jockey_win_pct', 'trainer_win_pct'
 ]
 
 for col in win_pct_columns:
-    merged_df[col] = -1
+    merged_df[col] = -1.0
 
 for idx, row in merged_df.iterrows():   
     horse_id = row['horse_id']
+    jockey_id = row['jockey_id']
+    trainer_id = row['trainer_id']
     course = row['course']
     going = row['going']
     dist_f = row['dist_f']
     win = (row['pos'] == '1')
     
     horse_records = horse_history[horse_id]
+    jockey_records = jockey_history[jockey_id]
+    trainer_records = trainer_history[trainer_id]
     
+    # Course-specific win percentage
     course_records = [r for r in horse_records if r['course'] == course]
-    merged_df.at[idx, 'horse_course_win_pct'] = calculate_historical_win_pct(course_records)
+    course_win_pct = calculate_historical_win_pct(course_records)
+    merged_df.at[idx, 'horse_course_win_pct'] = course_win_pct
     
+    # Distance-specific win percentage
     distance_records = [r for r in horse_records if r['dist_f'] == dist_f]
-    merged_df.at[idx, 'horse_distance_win_pct'] = calculate_historical_win_pct(distance_records)
+    distance_win_pct = calculate_historical_win_pct(distance_records)
+    merged_df.at[idx, 'horse_distance_win_pct'] = distance_win_pct
     
+    # Going-specific win percentage
     going_records = [r for r in horse_records if r['going'] == going]
-    merged_df.at[idx, 'horse_going_win_pct'] = calculate_historical_win_pct(going_records)
+    going_win_pct = calculate_historical_win_pct(going_records)
+    merged_df.at[idx, 'horse_going_win_pct'] = going_win_pct
     
+    # Jockey overall win percentage
+    jockey_win_pct = calculate_historical_win_pct(jockey_records)
+    merged_df.at[idx, 'jockey_win_pct'] = jockey_win_pct
+    
+    # Trainer overall win percentage  
+    trainer_win_pct = calculate_historical_win_pct(trainer_records)
+    merged_df.at[idx, 'trainer_win_pct'] = trainer_win_pct
+    
+    # Add current race to horse history
     race_record = {
         'course': course,
         'going': going, 
@@ -86,6 +109,20 @@ for idx, row in merged_df.iterrows():
     }
     
     horse_history[horse_id].append(race_record)
+    
+    # Add current race to jockey history
+    jockey_record = {
+        'win': win,
+        'datetime': row['datetime']
+    }
+    jockey_history[jockey_id].append(jockey_record)
+    
+    # Add current race to trainer history
+    trainer_record = {
+        'win': win,
+        'datetime': row['datetime']
+    }
+    trainer_history[trainer_id].append(trainer_record)
 
 # date, region
 merged_df['date'] = pd.to_datetime(merged_df['date'], errors='coerce')

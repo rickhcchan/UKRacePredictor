@@ -118,6 +118,20 @@ for course_name, races in courses.items():
                 horse_going_stats.get('runs', '0'), 
                 horse_going_stats.get('wins', '0')
             )
+            
+            # Jockey and trainer overall win percentages from stats
+            jockey_stats = stats.get('jockey', {})
+            trainer_stats = stats.get('trainer', {})
+            
+            jockey_win_pct = calculate_win_percentage(
+                jockey_stats.get('ovr_runs', '0'),
+                jockey_stats.get('ovr_wins', '0')
+            )
+            
+            trainer_win_pct = calculate_win_percentage(
+                trainer_stats.get('ovr_runs', '0'),
+                trainer_stats.get('ovr_wins', '0')
+            )
 
             row = {
                 'race_id': int(race_info.get('race_id')),
@@ -149,6 +163,8 @@ for course_name, races in courses.items():
                 'horse_course_win_pct': horse_course_win_pct,
                 'horse_distance_win_pct': horse_distance_win_pct,
                 'horse_going_win_pct': horse_going_win_pct,
+                'jockey_win_pct': jockey_win_pct,
+                'trainer_win_pct': trainer_win_pct,
 
             }
             rows.append(row)
@@ -173,7 +189,8 @@ prediction_cols = [
     'horse_id', 'age', 'sex', 'lbs', 'hg', 'jockey_id', 'trainer_id', 
     'or', 'rpr', 'ts', 'sire', 'dam', 'damsire', 'owner_id',
     'month_sin', 'month_cos', 'track_id', 'rating_max', 'age_min', 'age_max',
-    'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct'
+    'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct',
+    'jockey_win_pct', 'trainer_win_pct'
 ]
 
 final_cols = [col for col in prediction_cols if col in df.columns]
