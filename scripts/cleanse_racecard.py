@@ -11,6 +11,18 @@ from common import DATA_DIR, RPSCRAPE_DIR, map_hg, parse_age_band
 from mappings import pattern_map, going_map, sex_map
 from pathlib import Path
 
+def calculate_win_percentage(runs_str, wins_str):
+    try:
+        runs = int(runs_str)
+        wins = int(wins_str)
+        
+        if runs == 0:
+            return -1
+        
+        return (wins / runs) * 100
+    except (ValueError, ZeroDivisionError):
+        return -1
+
 RACECARD_SOURCE_DIR = RPSCRAPE_DIR / 'racecards'
 RACECARD_DEST_DIR = DATA_DIR / 'prediction' / 'raw'
 
@@ -86,6 +98,41 @@ for course_name, races in courses.items():
             else:
                 damsire_full = damsire_name
 
+            # Calculate win percentages from stats
+            stats = runner.get('stats', {})
+            
+            # Horse stats only
+            horse_course_stats = stats.get('course', {})
+            horse_distance_stats = stats.get('distance', {})
+            horse_going_stats = stats.get('going', {})
+            
+            horse_course_win_pct = calculate_win_percentage(
+                horse_course_stats.get('runs', '0'), 
+                horse_course_stats.get('wins', '0')
+            )
+            horse_distance_win_pct = calculate_win_percentage(
+                horse_distance_stats.get('runs', '0'), 
+                horse_distance_stats.get('wins', '0')
+            )
+            horse_going_win_pct = calculate_win_percentage(
+                horse_going_stats.get('runs', '0'), 
+                horse_going_stats.get('wins', '0')
+            )
+            
+            # Jockey and trainer overall win percentages from stats
+            jockey_stats = stats.get('jockey', {})
+            trainer_stats = stats.get('trainer', {})
+            
+            jockey_win_pct = calculate_win_percentage(
+                jockey_stats.get('ovr_runs', '0'),
+                jockey_stats.get('ovr_wins', '0')
+            )
+            
+            trainer_win_pct = calculate_win_percentage(
+                trainer_stats.get('ovr_runs', '0'),
+                trainer_stats.get('ovr_wins', '0')
+            )
+
             row = {
                 'race_id': int(race_info.get('race_id')),
                 'type': type_mapping.get(race_info['type'], -1),
@@ -113,6 +160,11 @@ for course_name, races in courses.items():
                 'age_band': race_info.get('age_band', ''),
                 'course': course_name,
                 'date': today,
+                'horse_course_win_pct': horse_course_win_pct,
+                'horse_distance_win_pct': horse_distance_win_pct,
+                'horse_going_win_pct': horse_going_win_pct,
+                'jockey_win_pct': jockey_win_pct,
+                'trainer_win_pct': trainer_win_pct,
 
             }
             rows.append(row)
@@ -132,14 +184,16 @@ df[['age_min', 'age_max']] = df['age_band'].apply(parse_age_band).apply(pd.Serie
 
 df.drop(columns=['course', 'date', 'month', 'rating_band', 'age_band'], inplace=True, errors='ignore')
 
-training_cols = [
+prediction_cols = [
     'race_id', 'type', 'class', 'pattern', 'dist_f', 'going', 'ran', 'draw',
     'horse_id', 'age', 'sex', 'lbs', 'hg', 'jockey_id', 'trainer_id', 
     'or', 'rpr', 'ts', 'sire', 'dam', 'damsire', 'owner_id',
-    'month_sin', 'month_cos', 'track_id', 'rating_max', 'age_min', 'age_max'
+    'month_sin', 'month_cos', 'track_id', 'rating_max', 'age_min', 'age_max',
+    'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct',
+    'jockey_win_pct', 'trainer_win_pct'
 ]
 
-final_cols = [col for col in training_cols if col in df.columns]
+final_cols = [col for col in prediction_cols if col in df.columns]
 df = df[final_cols]
 
 output_file = DATA_DIR / 'prediction' / 'processed' / 'cleaned_racecard.csv'

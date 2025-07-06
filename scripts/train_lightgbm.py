@@ -8,7 +8,7 @@ from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
 import joblib
 from pathlib import Path
 
-from common import DATA_DIR
+from common import DATA_DIR, PROJECT_DIR
 
 # Define feature categories for proper LightGBM handling
 
@@ -25,7 +25,9 @@ categorical_features = [
 # Ordinal features (meaningful ordering - bigger/smaller matters)
 ordinal_features = [
     'class', 'pattern', 'going', 'age', 'lbs', 'or', 'rpr', 'ts', 
-    'rating_max', 'age_min', 'age_max', 'dist_f', 'ran', 'draw'
+    'rating_max', 'age_min', 'age_max', 'dist_f', 'ran', 'draw',
+    'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct',
+    'jockey_win_pct', 'trainer_win_pct'
 ]
 
 # Continuous/numerical features (cyclical or truly continuous)
@@ -195,7 +197,7 @@ print(f"\nTop 15 Most Important Features:")
 print(feature_importance.head(15))
 
 # Save the model and metadata
-model_dir = Path("../models")
+model_dir = PROJECT_DIR / "models"
 model_dir.mkdir(exist_ok=True)
 
 model_file = model_dir / "lightgbm_model.pkl"
