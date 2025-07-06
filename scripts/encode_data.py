@@ -3,32 +3,23 @@
 import json
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 
-from common import DATA_DIR, map_hg, parse_age_band
+from common import (DATA_DIR, map_hg, parse_age_band, calculate_14d_win_pct_from_history, 
+                   calculate_win_percentage, parse_race_time)
 from mappings import pattern_map, going_map, sex_map
 from pathlib import Path
 
-def parse_race_time(date_str, time_str):
-    try:
-        date_part = datetime.strptime(date_str, '%Y-%m-%d').date()
-        time_part = datetime.strptime(time_str, '%H:%M').time()
-        hour = time_part.hour
-        if hour in [11, 12]:
-            final_hour = hour
-        else:
-            final_hour = hour + 12 if hour <= 10 else hour
-        return datetime.combine(date_part, time_part.replace(hour=final_hour))
-    except:
-        return datetime.strptime(date_str, '%Y-%m-%d')
 
 def calculate_historical_win_pct(historical_records):
     total_races = len(historical_records)
     if total_races == 0:
-        return -1
+        return -1.0
     wins = sum(1 for record in historical_records if record['win'])
-    return (wins / total_races) * 100
+    return calculate_win_percentage(total_races, wins)
+
+
 
 def save_mapping(mapping: dict, filename: str):
     mapping_path = DATA_DIR / 'mapping' / filename
@@ -57,7 +48,11 @@ trainer_history = defaultdict(list)
 
 win_pct_columns = [
     'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct',
-    'jockey_win_pct', 'trainer_win_pct'
+    'jockey_win_pct', 'trainer_win_pct',
+    'jockey_14d_runs', 'jockey_14d_wins', 'jockey_14d_win_pct',
+    'trainer_14d_runs', 'trainer_14d_wins', 'trainer_14d_win_pct',
+    'jockey_14d_type_runs', 'jockey_14d_type_wins', 'jockey_14d_type_win_pct',
+    'trainer_14d_type_runs', 'trainer_14d_type_wins', 'trainer_14d_type_win_pct'
 ]
 
 for col in win_pct_columns:
@@ -70,6 +65,7 @@ for idx, row in merged_df.iterrows():
     course = row['course']
     going = row['going']
     dist_f = row['dist_f']
+    race_type = row['type']  # Race type for type-specific 14d stats
     win = (row['pos'] == '1')
     
     horse_records = horse_history[horse_id]
@@ -99,6 +95,30 @@ for idx, row in merged_df.iterrows():
     trainer_win_pct = calculate_historical_win_pct(trainer_records)
     merged_df.at[idx, 'trainer_win_pct'] = trainer_win_pct
     
+    # Jockey 14-day statistics (overall - all race types)
+    jockey_14d_win_pct, jockey_14d_runs, jockey_14d_wins = calculate_14d_win_pct_from_history(jockey_records, row['datetime'])
+    merged_df.at[idx, 'jockey_14d_runs'] = jockey_14d_runs
+    merged_df.at[idx, 'jockey_14d_wins'] = jockey_14d_wins
+    merged_df.at[idx, 'jockey_14d_win_pct'] = jockey_14d_win_pct
+    
+    # Trainer 14-day statistics (overall - all race types)
+    trainer_14d_win_pct, trainer_14d_runs, trainer_14d_wins = calculate_14d_win_pct_from_history(trainer_records, row['datetime'])
+    merged_df.at[idx, 'trainer_14d_runs'] = trainer_14d_runs
+    merged_df.at[idx, 'trainer_14d_wins'] = trainer_14d_wins
+    merged_df.at[idx, 'trainer_14d_win_pct'] = trainer_14d_win_pct
+    
+    # Jockey 14-day statistics (by race type - flat vs jumps)
+    jockey_14d_type_win_pct, jockey_14d_type_runs, jockey_14d_type_wins = calculate_14d_win_pct_from_history(jockey_records, row['datetime'], race_type)
+    merged_df.at[idx, 'jockey_14d_type_runs'] = jockey_14d_type_runs
+    merged_df.at[idx, 'jockey_14d_type_wins'] = jockey_14d_type_wins
+    merged_df.at[idx, 'jockey_14d_type_win_pct'] = jockey_14d_type_win_pct
+    
+    # Trainer 14-day statistics (by race type - flat vs jumps)
+    trainer_14d_type_win_pct, trainer_14d_type_runs, trainer_14d_type_wins = calculate_14d_win_pct_from_history(trainer_records, row['datetime'], race_type)
+    merged_df.at[idx, 'trainer_14d_type_runs'] = trainer_14d_type_runs
+    merged_df.at[idx, 'trainer_14d_type_wins'] = trainer_14d_type_wins
+    merged_df.at[idx, 'trainer_14d_type_win_pct'] = trainer_14d_type_win_pct
+    
     # Add current race to horse history
     race_record = {
         'course': course,
@@ -110,17 +130,19 @@ for idx, row in merged_df.iterrows():
     
     horse_history[horse_id].append(race_record)
     
-    # Add current race to jockey history
+    # Add current race to jockey history (include type for type-specific calculations)
     jockey_record = {
         'win': win,
-        'datetime': row['datetime']
+        'datetime': row['datetime'],
+        'type': race_type
     }
     jockey_history[jockey_id].append(jockey_record)
     
-    # Add current race to trainer history
+    # Add current race to trainer history (include type for type-specific calculations)
     trainer_record = {
         'win': win,
-        'datetime': row['datetime']
+        'datetime': row['datetime'],
+        'type': race_type
     }
     trainer_history[trainer_id].append(trainer_record)
 
@@ -231,8 +253,12 @@ save_mapping(damsire_to_id, 'damsire_mapping.json')
 
 merged_df.drop(columns=['sire_id', 'dam_id', 'damsire_id'], inplace=True, errors='ignore')
 
-# comment, datetime
-merged_df.drop(columns=['comment', 'datetime'], inplace=True, errors='ignore')
+# Keep datetime and pos for cleansing calculations (but drop comment)
+merged_df.drop(columns=['comment'], inplace=True, errors='ignore')
+
+print(f"Final columns in encoded data: {merged_df.columns.tolist()}")
+print(f"Helper columns for cleansing: datetime, pos")
+print(f"Training will exclude: datetime, pos, and identifier columns")
 
 output_file = DATA_DIR / 'training' / 'processed' / 'encoded.csv'
 output_file.parent.mkdir(parents=True, exist_ok=True)
