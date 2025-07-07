@@ -82,7 +82,7 @@ def calculate_14d_stats_from_encoded(jockey_id, trainer_id, current_date, encode
     
     # If race type is provided, filter by race type
     if race_type is not None:
-        recent_data_filtered = recent_data[recent_data['type'] == race_type]
+        recent_data_filtered = recent_data[recent_data['type_id'] == race_type]
     else:
         recent_data_filtered = recent_data
     
@@ -129,7 +129,7 @@ def calculate_14d_win_pct_from_history(historical_records, current_datetime, rac
     
     # Filter by race type if specified
     if race_type is not None:
-        recent_records = [r for r in recent_records if r.get('type') == race_type]
+        recent_records = [r for r in recent_records if r.get('type_id') == race_type]
     
     total_runs = len(recent_records)
     if total_runs == 0:

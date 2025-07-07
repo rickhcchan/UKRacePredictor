@@ -19,17 +19,17 @@ except ImportError:
     print("💡 Google Sheets integration not available. Install 'gspread google-auth' to enable.")
 
 def load_models():
-    """Load the cleaned, calibrated model"""
-    model_dir = PROJECT_DIR / "models"
+    """Load the v1 calibrated model"""
+    model_dir = PROJECT_DIR / "models" / "v1"
     
     # Load base model
-    base_model = joblib.load(model_dir / "lightgbm_model_clean.pkl")
+    base_model = joblib.load(model_dir / "lightgbm_model_v1.pkl")
     
     # Load calibrator
-    calibrator = joblib.load(model_dir / "probability_calibrator.pkl")
+    calibrator = joblib.load(model_dir / "probability_calibrator_v1.pkl")
     
     # Load feature list
-    with open(model_dir / "feature_list_clean.txt", 'r') as f:
+    with open(model_dir / "feature_list_v1.txt", 'r') as f:
         feature_list = [line.strip() for line in f]
     
     return base_model, calibrator, feature_list
@@ -44,7 +44,7 @@ def predict_race_winners():
     print(f"✅ Loaded cleaned model with {len(feature_list)} features")
     
     # Load today's cleansed racecard
-    racecard_file = DATA_DIR / f"racecard_{datetime.now().strftime('%Y-%m-%d')}_cleansed.csv"
+    racecard_file = DATA_DIR / 'prediction' / 'processed' / f"racecard_{datetime.now().strftime('%Y-%m-%d')}_cleansed.csv"
     
     if not racecard_file.exists():
         print(f"❌ No racecard file found: {racecard_file}")
@@ -87,7 +87,7 @@ def predict_race_winners():
         # Fill missing features with defaults
         for feature in missing_features:
             df[feature] = 0
-    
+
     # Prepare features for prediction
     X = df[feature_list]
     
@@ -194,7 +194,7 @@ def predict_race_winners():
     
     # Feature importance reminder
     print(f"\n🔍 MODEL FEATURES USED (Top 5):")
-    importance_df = pd.read_csv(PROJECT_DIR / "models" / "feature_importance_clean.csv")
+    importance_df = pd.read_csv(PROJECT_DIR / "models" / "v1" / "feature_importance_v1.csv")
     for _, row in importance_df.head(5).iterrows():
         print(f"• {row['feature']}: {row['importance']:,.0f}")
     

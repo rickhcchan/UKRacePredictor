@@ -17,3 +17,11 @@ seaborn>=0.12.0
 # Google Sheets Integration (optional)
 gspread>=5.0.0
 google-auth>=2.0.0
+
+# Web Scraping (for rpscrape integration)
+requests>=2.31.0
+lxml>=4.9.0
+orjson>=3.9.0
+
+# Additional utilities
+beautifulsoup4>=4.12.0

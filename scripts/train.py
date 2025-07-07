@@ -31,7 +31,7 @@ identifier_features = [
 ]
 
 categorical_features = [
-    'type', 'sex', 'sire', 'dam', 'damsire', 'track_id', 'hg'
+    'type_id', 'sex', 'sire_id', 'dam_id', 'damsire_id', 'track_id', 'hg'
 ]
 
 # REMOVED: 'or', 'rpr', 'ts' (potentially post-race data)
@@ -76,6 +76,7 @@ if missing_features:
 excluded_features = identifier_features + ['win']
 print(f"Excluded features: {excluded_features}")
 print(f"Removed potentially leaky features: or, rpr, ts")
+print(f"Kept 'dec' (SP odds) in data for results analysis but excluded from training")
 
 # Prepare the data
 X = df[available_features]

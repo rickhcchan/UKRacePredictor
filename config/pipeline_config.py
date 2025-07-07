@@ -76,7 +76,7 @@ FEATURE_CONFIG = {
 # File Patterns
 FILE_PATTERNS = {
     "racecard_raw": "data/prediction/raw/{date}.json",
-    "racecard_cleansed": "data/racecard_{date}_cleansed.csv",
+    "racecard_cleansed": "data/prediction/processed/racecard_{date}_cleansed.csv",
     "predictions_output": "data/predictions_{date}_calibrated.csv",
     "encoded_training": "data/training/processed/encoded.csv",
     "model_file": "models/v1/lightgbm_model_v1.pkl",

@@ -27,20 +27,13 @@ def parse_race_time(date_str, time_str):
         return datetime.strptime(date_str, '%Y-%m-%d')
 
 def load_encoded_data():
-    """Load encoded.csv data for 14-day calculations"""
     try:
         encoded_file = DATA_DIR / 'training' / 'processed' / 'encoded.csv'
         if not encoded_file.exists():
-            print(f"Warning: {encoded_file} not found. Cannot calculate 14-day stats from encoded data.")
             return None
         
-        # Load encoded data - all mappings already applied, datetime already parsed
         encoded_df = pd.read_csv(encoded_file)
-        
-        # Convert datetime column to datetime type
         encoded_df['datetime'] = pd.to_datetime(encoded_df['datetime'])
-        
-        print(f"Loaded encoded data: {len(encoded_df)} records from {encoded_df['datetime'].min()} to {encoded_df['datetime'].max()}")
         
         return encoded_df
         
@@ -48,13 +41,6 @@ def load_encoded_data():
         print(f"Error loading encoded data: {e}")
         return None
 
-def safe_mapping_lookup(mapping, name_with_region, name_only):
-    if name_with_region in mapping:
-        return mapping[name_with_region]
-    elif name_only in mapping:
-        return mapping[name_only]
-    else:
-        return -1
 
 # File setup
 RACECARD_SOURCE_DIR = RPSCRAPE_DIR / 'racecards'
@@ -75,39 +61,21 @@ else:
 with open(DATA_DIR / 'mapping' / 'type_mapping.json') as f:
     type_mapping = json.load(f)
 
-with open(DATA_DIR / 'mapping' / 'sire_mapping.json') as f:
-    sire_mapping = json.load(f)
-
-with open(DATA_DIR / 'mapping' / 'dam_mapping.json') as f:
-    dam_mapping = json.load(f)
-
-with open(DATA_DIR / 'mapping' / 'damsire_mapping.json') as f:
-    damsire_mapping = json.load(f)
-
 with open(DATA_DIR / 'mapping' / 'owner_mapping.json') as f:
     owner_mapping = json.load(f)
 
 with open(DATA_DIR / 'mapping' / 'track_mapping.json') as f:
     track_mapping = json.load(f)
 
+with open(DATA_DIR / 'mapping' / 'horse_bloodlines.json') as f:
+    horse_bloodlines_raw = json.load(f)
+    horse_bloodlines = {int(k): v for k, v in horse_bloodlines_raw.items()}
+
 with open(racecard_file, encoding='utf-8') as f:
     racecard_data = json.load(f)
 
-# Load encoded data for 14-day calculations
-print("Loading encoded data for 14-day statistics...")
 encoded_data = load_encoded_data()
-if encoded_data is not None:
-    print(f"Loaded {len(encoded_data)} historical race records")
-else:
-    print("Warning: Will use JSON-derived 14-day statistics as fallback")
 
-def safe_mapping_lookup(mapping, name_with_region, name_only):
-    if name_with_region in mapping:
-        return mapping[name_with_region]
-    elif name_only in mapping:
-        return mapping[name_only]
-    else:
-        return -1
 
 rows = []
 
@@ -120,68 +88,55 @@ for course_name, races in courses.items():
         runners = race_info.get("runners", [])
         for runner in runners:
 
-            # Breeding info with region handling
-            sire_name = runner.get('sire', '')
-            sire_region = runner.get('sire_region', '')
-            if sire_name and sire_region:
-                sire_full = f"{sire_name} ({sire_region})"
-            else:
-                sire_full = sire_name
-            
-            dam_name = runner.get('dam', '')
-            dam_region = runner.get('dam_region', '')
-            if dam_name and dam_region:
-                dam_full = f"{dam_name} ({dam_region})"
-            else:
-                dam_full = dam_name
-            
-            damsire_name = runner.get('damsire', '')
-            damsire_region = runner.get('damsire_region', '')
-            if damsire_name and damsire_region:
-                damsire_full = f"{damsire_name} ({damsire_region})"
-            else:
-                damsire_full = damsire_name
+            # Initialize all win percentages
+            horse_course_win_pct = -1.0
+            horse_distance_win_pct = -1.0
+            horse_going_win_pct = -1.0
+            jockey_win_pct = -1.0
+            trainer_win_pct = -1.0
 
-            # Calculate win percentages from stats
-            stats = runner.get('stats', {})
-            
-            # Horse-specific stats
-            horse_course_stats = stats.get('course', {})
-            horse_distance_stats = stats.get('distance', {})
-            horse_going_stats = stats.get('going', {})
-            
-            horse_course_win_pct = calculate_win_percentage(
-                horse_course_stats.get('runs', '0'), 
-                horse_course_stats.get('wins', '0')
-            )
-            horse_distance_win_pct = calculate_win_percentage(
-                horse_distance_stats.get('runs', '0'), 
-                horse_distance_stats.get('wins', '0')
-            )
-            horse_going_win_pct = calculate_win_percentage(
-                horse_going_stats.get('runs', '0'), 
-                horse_going_stats.get('wins', '0')
-            )
-            
-            # Jockey and trainer overall win percentages
-            jockey_stats = stats.get('jockey', {})
-            trainer_stats = stats.get('trainer', {})
-            
-            jockey_win_pct = calculate_win_percentage(
-                jockey_stats.get('ovr_runs', '0'),
-                jockey_stats.get('ovr_wins', '0')
-            )
-            
-            trainer_win_pct = calculate_win_percentage(
-                trainer_stats.get('ovr_runs', '0'),
-                trainer_stats.get('ovr_wins', '0')
-            )
-
-            # Calculate 14-day stats using shared function
+            # Calculate all statistics from encoded data only
             if encoded_data is not None:
+                horse_id = int(runner.get('horse_id', -1))
                 jockey_id = int(runner.get('jockey_id', -1))
                 trainer_id = int(runner.get('trainer_id', -1))
                 race_type = type_mapping.get(race_info['type'], -1)
+                
+                # Horse-specific win percentages: calculate fresh for current race conditions
+                if horse_id != -1:
+                    horse_records = encoded_data[encoded_data['horse_id'] == horse_id]
+                    
+                    if len(horse_records) > 0:
+                        # Course-specific win percentage - SKIP for now (would need course column in encoded data)
+                        # track_id combines course+distance, so can't separate course-only stats
+                        horse_course_win_pct = -1.0
+                        
+                        # Distance-specific win percentage for this specific distance
+                        distance_records = horse_records[horse_records['dist_f'] == race_info.get('distance_f')]
+                        if len(distance_records) > 0:
+                            distance_wins = (distance_records['win'] == 1).sum()
+                            horse_distance_win_pct = distance_wins / len(distance_records)
+                        
+                        # Going-specific win percentage for this specific going
+                        going_id = going_map.get(race_info.get('going'), 3)
+                        going_records = horse_records[horse_records['going'] == going_id]
+                        if len(going_records) > 0:
+                            going_wins = (going_records['win'] == 1).sum()
+                            horse_going_win_pct = going_wins / len(going_records)
+                
+                # Jockey lifetime win percentage from encoded data only
+                if jockey_id != -1:
+                    jockey_records = encoded_data[encoded_data['jockey_id'] == jockey_id]
+                    if len(jockey_records) > 0:
+                        jockey_wins = (jockey_records['win'] == 1).sum()
+                        jockey_win_pct = jockey_wins / len(jockey_records)
+                
+                # Trainer lifetime win percentage from encoded data only
+                if trainer_id != -1:
+                    trainer_records = encoded_data[encoded_data['trainer_id'] == trainer_id]
+                    if len(trainer_records) > 0:
+                        trainer_wins = (trainer_records['win'] == 1).sum()
+                        trainer_win_pct = trainer_wins / len(trainer_records)
                 
                 # Calculate overall 14-day stats (all race types)
                 stats_overall = calculate_14d_stats_from_encoded(
@@ -212,35 +167,45 @@ for course_name, races in courses.items():
                 trainer_14d_type_win_pct = stats_bytype['trainer_14d_win_pct']
                 
             else:
-                # Fallback to JSON data if encoded data not available
-                trainer_14d_direct = runner.get('trainer_14_days', {})
-                trainer_14d_runs = float(trainer_14d_direct.get('runs', '0'))
-                trainer_14d_wins = float(trainer_14d_direct.get('wins', '0'))
-                trainer_14d_win_pct = calculate_win_percentage(trainer_14d_runs, trainer_14d_wins)
-                
-                # No jockey 14-day data available in JSON
+                # If encoded data not available, all statistics remain -1.0 (no data)
                 jockey_14d_runs = 0.0
                 jockey_14d_wins = 0.0
                 jockey_14d_win_pct = -1.0
                 
-                # No type-specific stats available without encoded data
+                trainer_14d_runs = 0.0
+                trainer_14d_wins = 0.0
+                trainer_14d_win_pct = -1.0
+                
                 jockey_14d_type_runs = 0.0
                 jockey_14d_type_wins = 0.0
                 jockey_14d_type_win_pct = -1.0
-                trainer_14d_type_runs = trainer_14d_runs
-                trainer_14d_type_wins = trainer_14d_wins
-                trainer_14d_type_win_pct = trainer_14d_win_pct
+                
+                trainer_14d_type_runs = 0.0
+                trainer_14d_type_wins = 0.0
+                trainer_14d_type_win_pct = -1.0
+
+            # Get bloodline IDs from horse_bloodlines mapping
+            horse_id = int(runner.get('horse_id', -1))
+            if horse_id in horse_bloodlines:
+                bloodline = horse_bloodlines[horse_id]
+                sire_id = bloodline['sire_id']
+                dam_id = bloodline['dam_id']
+                damsire_id = bloodline['damsire_id']
+            else:
+                sire_id = -1
+                dam_id = -1
+                damsire_id = -1
 
             row = {
                 'race_id': int(race_info.get('race_id')),
-                'type': type_mapping.get(race_info['type'], -1),
+                'type_id': type_mapping.get(race_info['type'], -1),
                 'class': class_id,
                 'pattern': pattern_map.get(race_info.get('pattern'), 5),
                 'dist_f': race_info.get('distance_f'),
                 'going': going_map.get(race_info.get('going'), 3),
                 'ran': len(race_info.get("runners", [])),
                 'draw': int(runner.get('draw', -1)),
-                'horse_id': int(runner.get('horse_id', -1)),
+                'horse_id': horse_id,
                 'horse_name': runner.get('name', ''),
                 'age': int(runner.get('age')),
                 'sex': sex_map.get(runner.get('sex_code'), -1),
@@ -251,9 +216,9 @@ for course_name, races in courses.items():
                 'or': int(runner.get('ofr', -1)) if runner.get('ofr') is not None else -1,
                 'rpr': int(runner.get('rpr', -1)) if runner.get('rpr') is not None else -1,
                 'ts': int(runner.get('ts', -1)) if runner.get('ts') is not None else -1,
-                'sire': safe_mapping_lookup(sire_mapping, sire_full, sire_name),
-                'dam': safe_mapping_lookup(dam_mapping, dam_full, dam_name),
-                'damsire': safe_mapping_lookup(damsire_mapping, damsire_full, damsire_name),
+                'sire_id': sire_id,
+                'dam_id': dam_id,
+                'damsire_id': damsire_id,
                 'owner_id': owner_mapping.get(runner.get('owner', '').replace(' & ', ' ').replace('-', ' '), -1),
                 'rating_band': race_info.get('rating_band', ''),
                 'age_band': race_info.get('age_band', ''),
@@ -277,6 +242,7 @@ for course_name, races in courses.items():
                 'trainer_14d_type_wins': trainer_14d_type_wins,
                 'trainer_14d_type_win_pct': trainer_14d_type_win_pct,
             }
+            
             rows.append(row)
 
 df = pd.DataFrame(rows)
@@ -291,14 +257,17 @@ df['track_id'] = (df['course'] + '_' + df['dist_f'].apply(lambda x: str(int(x)) 
 
 df[['age_min', 'age_max']] = df['age_band'].apply(parse_age_band).apply(pd.Series)
 
+# Extract rating_max from rating_band (same as in encode_data.py)
+df['rating_max'] = df['rating_band'].str.extract(r'-(\d+)').astype(float)
+
 df.drop(columns=['course', 'date', 'month', 'rating_band', 'age_band'], inplace=True, errors='ignore')
 
 # Define final columns for model input
 clean_prediction_cols = [
-    'race_id', 'type', 'class', 'pattern', 'dist_f', 'going', 'ran', 'draw',
+    'race_id', 'type_id', 'class', 'pattern', 'dist_f', 'going', 'ran', 'draw',
     'horse_id', 'horse_name', 'age', 'sex', 'lbs', 'hg', 'jockey_id', 'trainer_id', 
-    'sire', 'dam', 'damsire', 'owner_id',
-    'month_sin', 'month_cos', 'track_id', 'age_min', 'age_max',
+    'sire_id', 'dam_id', 'damsire_id', 'owner_id',
+    'month_sin', 'month_cos', 'track_id', 'age_min', 'age_max', 'rating_max',
     'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct',
     'jockey_win_pct', 'trainer_win_pct',
     'jockey_14d_runs', 'jockey_14d_wins', 'jockey_14d_win_pct',
@@ -312,7 +281,7 @@ final_cols = [col for col in clean_prediction_cols if col in df.columns]
 df = df[final_cols]
 
 # Save output
-output_file = DATA_DIR / f"racecard_{datetime.now().strftime('%Y-%m-%d')}_cleansed.csv"
+output_file = DATA_DIR / 'prediction' / 'processed' / f"racecard_{datetime.now().strftime('%Y-%m-%d')}_cleansed.csv"
 output_file.parent.mkdir(exist_ok=True, parents=True)
 df.to_csv(output_file, index=False)
 
