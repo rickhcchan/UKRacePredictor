@@ -1,4 +1,4 @@
-# scripts/predict_calibrated.py
+# scripts/predict.py
 
 import pandas as pd
 import numpy as np
@@ -10,13 +10,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from common import DATA_DIR, PROJECT_DIR, convert_to_24h_time
-# Import Google Sheets functionality
-try:
-    from google_sheets_writer import write_formatted_predictions_to_sheet
-    GOOGLE_SHEETS_AVAILABLE = True
-except ImportError:
-    GOOGLE_SHEETS_AVAILABLE = False
-    print("💡 Google Sheets integration not available. Install 'gspread google-auth' to enable.")
+# Google Sheets integration removed for now
 
 def load_models():
     """Load the v1 calibrated model"""
@@ -116,46 +110,99 @@ def predict_race_winners():
     
     df = df.groupby('race_id').apply(normalize_race_probabilities).reset_index(drop=True)
     
-    # Strategy: Take only the TOP horse per race if above threshold
-    # This prevents field size bias and improves precision
-    MIN_PROBABILITY_THRESHOLD = 0.15  # 15% calibrated probability minimum
-    MAX_PREDICTIONS_PER_RACE = 1  # Only predict the favorite
+    # Enhanced Strategy: Cherry-pick races with strong favorites and show multiple horses
+    MIN_CALIB_THRESHOLD = 0.20  # 20% calibrated probability minimum (X)
     
-    significant_horses = []
-    race_groups = df.groupby('race_id')
+    # Calculate dynamic normalized threshold (Y) based on number of runners
+    def calculate_norm_threshold(num_runners):
+        # Optimized formula: Y = 1.5 × (100/num_runners)
+        # This ensures we're always well above random chance
+        # 4 horses: 1.5 × 25% = 37.5% (vs random 25%)
+        # 8 horses: 1.5 × 12.5% = 18.75% (vs random 12.5%)
+        # 12 horses: 1.5 × 8.33% = 12.5% (vs random 8.33%)
+        factor = 1.5  # 50% above random chance (optimal from backtest)
+        threshold = factor * (100 / num_runners) / 100  # Convert to decimal
+        return threshold
     
-    for race_id, race_group in race_groups:
-        # Sort by calibrated probability (highest first)
-        race_sorted = race_group.sort_values('win_probability', ascending=False)
+    MIN_HORSES_PER_RACE = 3     # Show at least 3 horses when race qualifies
+    
+    all_race_predictions = []
+    qualifying_races = []
+    
+    # Process each race
+    for race_id, race_group in df.groupby('race_id'):
+        # Sort by normalized probability (highest first)
+        race_sorted = race_group.sort_values('win_probability_normalized', ascending=False)
         
-        # Take top horses above threshold, limited per race
-        top_horses = race_sorted.head(MAX_PREDICTIONS_PER_RACE)
-        qualifying_horses = top_horses[top_horses['win_probability'] >= MIN_PROBABILITY_THRESHOLD]
+        # Calculate dynamic normalized threshold for this race
+        num_runners = len(race_group)
+        min_norm_threshold = calculate_norm_threshold(num_runners)
         
-        if len(qualifying_horses) > 0:
-            significant_horses.append(qualifying_horses)
+        # Check if race has any qualifying horses
+        # Horse qualifies if it meets: Calibrated >20% OR Normalized >dynamic%
+        qualifying_horses = race_sorted[
+            (race_sorted['win_probability'] >= MIN_CALIB_THRESHOLD) |
+            (race_sorted['win_probability_normalized'] >= (min_norm_threshold * 100))
+        ]
+        
+        race_qualifies = len(qualifying_horses) > 0
+        
+        if race_qualifies:
+            # Display Logic: Show at least 3 horses (qualifying + reference for context)
+            horses_to_show = race_sorted.head(MIN_HORSES_PER_RACE)
+            
+            # Add any additional qualifying horses beyond the top 3
+            additional_qualifying = qualifying_horses[~qualifying_horses.index.isin(horses_to_show.index)]
+            if len(additional_qualifying) > 0:
+                horses_to_show = pd.concat([horses_to_show, additional_qualifying])
+            
+            # Handle ties with the last shown horse
+            if len(race_sorted) > len(horses_to_show):
+                last_horse_norm_prob = horses_to_show.iloc[-1]['win_probability_normalized']
+                
+                # Find all remaining horses with same probability as last horse
+                remaining_horses = race_sorted[~race_sorted.index.isin(horses_to_show.index)]
+                same_prob_horses = remaining_horses[
+                    remaining_horses['win_probability_normalized'] == last_horse_norm_prob
+                ]
+                
+                # Include horses with same probability as last horse
+                if len(same_prob_horses) > 0:
+                    horses_to_show = pd.concat([horses_to_show, same_prob_horses])
+            
+            qualifying_races.append(horses_to_show)
+        
+        # Always collect all horses for full output file
+        all_race_predictions.append(race_sorted)
     
-    if significant_horses:
-        significant_horses = pd.concat(significant_horses, ignore_index=True)
+    # Combine all predictions for CSV output
+    all_predictions = pd.concat(all_race_predictions, ignore_index=True) if all_race_predictions else pd.DataFrame()
+    
+    # Combine qualifying races for display
+    if qualifying_races:
+        significant_horses = pd.concat(qualifying_races, ignore_index=True)
     else:
         significant_horses = pd.DataFrame()
     
     if len(significant_horses) == 0:
-        print(f"\n❌ No horses found with >{MIN_PROBABILITY_THRESHOLD:.0%} win probability")
-        print("💡 Lowering threshold to show top horses...")
-        # Show top horse per race regardless of threshold
-        top_per_race = []
+        print(f"\n❌ No races found with top horse meeting EITHER criteria:")
+        print(f"   • Calibrated probability >{MIN_CALIB_THRESHOLD:.0%} OR")
+        print(f"   • Normalized probability >dynamic threshold (1.5 × random chance)")
+        print("💡 Showing top 3 horses from each race...")
+        # Show top 3 horses per race as fallback
+        fallback_races = []
         for race_id, race_group in df.groupby('race_id'):
-            top_horse = race_group.nlargest(1, 'win_probability')
-            top_per_race.append(top_horse)
-        significant_horses = pd.concat(top_per_race, ignore_index=True)
-        print(f"📊 Top horse per race (forced selection):")
+            top_3 = race_group.nlargest(3, 'win_probability_normalized')
+            fallback_races.append(top_3)
+        significant_horses = pd.concat(fallback_races, ignore_index=True) if fallback_races else df.head(0)
+        print(f"📊 Fallback: Top 3 horses per race")
     
-    # Sort by 24-hour time first (chronological order), then course, then probability
-    significant_horses = significant_horses.sort_values(['time_24h', 'course', 'win_probability'], ascending=[True, True, False])
+    # Sort by 24-hour time first (chronological order), then course, then normalized probability
+    significant_horses = significant_horses.sort_values(['time_24h', 'course', 'win_probability_normalized'], ascending=[True, True, False])
     
-    print(f"\n🎯 TOP HORSES PER RACE (>{MIN_PROBABILITY_THRESHOLD:.0%} threshold, max {MAX_PREDICTIONS_PER_RACE} per race):")
-    print("=" * 80)
+    print(f"\n🎯 CHERRY-PICKED RACES (At least 1 horse: Calibrated >{MIN_CALIB_THRESHOLD:.0%} OR normalized >dynamic threshold):")
+    print("💡 BET LEGEND: ✅ BET = Qualifies (Calibrated >20% OR normalized >dynamic%), 📋 REF = Reference only")
+    print("=" * 90)
     
     current_race = None
     for _, horse in significant_horses.iterrows():
@@ -164,33 +211,57 @@ def predict_race_winners():
         if race_key != current_race:
             if current_race is not None:
                 print()  # Add space between races
-            print(f"\n📍 {horse['course']} - {horse['time']}")
-            print("-" * 50)
+            
+            # Count total horses in this race
+            race_horses = significant_horses[
+                (significant_horses['course'] == horse['course']) & 
+                (significant_horses['time'] == horse['time'])
+            ]
+            total_horses_in_race = len(df[df['race_id'] == horse['race_id']])
+            
+            # Calculate and display the dynamic threshold for this race
+            dynamic_threshold = calculate_norm_threshold(total_horses_in_race) * 100  # Convert to percentage
+            
+            print(f"\n📍 {horse['course']} - {horse['time']} ({total_horses_in_race} horses total)")
+            print(f"   Qualifies: Calibrated >20% OR normalized >{dynamic_threshold:.1f}%")
+            print("-" * 80)
+            print(f"{'Horse':25} | {'Base%':>6} | {'Calib%':>7} | {'Norm%':>6} | {'BET':>6}")
+            print("-" * 80)
             current_race = race_key
         
-        # Format probability display
+        # Format probability display with all three percentages
         base_prob = horse['base_probability'] * 100
         calib_prob = horse['win_probability'] * 100
+        norm_prob = horse['win_probability_normalized']
         
-        print(f"{horse['horse_name']:25} | {calib_prob:5.1f}% | (Base: {base_prob:4.1f}%)")
+        # Determine if this is a bet (horse qualifies: above X OR above Y threshold)
+        dynamic_threshold = calculate_norm_threshold(len(df[df['race_id'] == horse['race_id']])) * 100
+        meets_calib_threshold = calib_prob >= (MIN_CALIB_THRESHOLD * 100)
+        meets_norm_threshold = norm_prob >= dynamic_threshold
+        is_bet = meets_calib_threshold or meets_norm_threshold
+        bet_indicator = "✅ BET" if is_bet else "📋 REF"
+        
+        print(f"{horse['horse_name']:25} | {base_prob:5.1f}% | {calib_prob:6.1f}% | {norm_prob:5.1f}% | {bet_indicator:>6}")
     
     # Calculate proper precision metrics
     total_predictions = len(significant_horses)
-    races_with_predictions = significant_horses['race_id'].nunique()
-    avg_predictions_per_race = total_predictions / races_with_predictions if races_with_predictions > 0 else 0
+    races_with_predictions = significant_horses['race_id'].nunique() if len(significant_horses) > 0 else 0
+    total_races = df['race_id'].nunique()
     
     # Summary statistics
     print(f"\n📊 SUMMARY STATISTICS:")
-    print(f"Total races analyzed: {df['race_id'].nunique()}")
+    print(f"Total races analyzed: {total_races}")
     print(f"Races with predictions: {races_with_predictions}")
     print(f"Total predictions: {total_predictions}")
-    print(f"Avg predictions per race: {avg_predictions_per_race:.1f}")
-    print(f"Coverage: {races_with_predictions/df['race_id'].nunique()*100:.1f}% of races")
-    print(f"Min probability threshold: {MIN_PROBABILITY_THRESHOLD:.0%}")
-    print(f"Max predictions per race: {MAX_PREDICTIONS_PER_RACE}")
+    print(f"Coverage: {races_with_predictions/total_races*100:.1f}% of races")
+    print(f"Min calibrated threshold: {MIN_CALIB_THRESHOLD:.0%}")
+    print(f"Dynamic normalized threshold: varies by race (1.5x random chance)")
+    print(f"Min horses per qualifying race: {MIN_HORSES_PER_RACE}")
     if total_predictions > 0:
-        print(f"Average probability: {significant_horses['win_probability'].mean()*100:.1f}%")
-        print(f"Max probability: {significant_horses['win_probability'].max()*100:.1f}%")
+        print(f"Average calibrated prob: {significant_horses['win_probability'].mean()*100:.1f}%")
+        print(f"Average normalized prob: {significant_horses['win_probability_normalized'].mean():.1f}%")
+        print(f"Max calibrated prob: {significant_horses['win_probability'].max()*100:.1f}%")
+        print(f"Max normalized prob: {significant_horses['win_probability_normalized'].max():.1f}%")
     
     # Feature importance reminder
     print(f"\n🔍 MODEL FEATURES USED (Top 5):")
@@ -204,23 +275,11 @@ def predict_race_winners():
     print(f"• Performance is conservative but realistic")
     print(f"• Consider this as ONE input to your betting strategy")
     
-    # Save predictions for later analysis
+    # Save predictions for later analysis (use all predictions, not just significant ones)
+    final_df = all_predictions if len(all_predictions) > 0 else df
     output_file = DATA_DIR / f"predictions_{datetime.now().strftime('%Y-%m-%d')}_calibrated.csv"
-    df.to_csv(output_file, index=False)
+    final_df.to_csv(output_file, index=False)
     print(f"\n💾 Full predictions saved to: {output_file}")
-    
-    # Optional: Write to Google Sheets
-    if GOOGLE_SHEETS_AVAILABLE and len(significant_horses) > 0:
-        print(f"\n📊 GOOGLE SHEETS INTEGRATION:")
-        try_sheets = input("Write predictions to Google Sheets? (y/n): ").lower().strip()
-        if try_sheets in ['y', 'yes']:
-            success = write_formatted_predictions_to_sheet(significant_horses)
-            if not success:
-                print("⚠️  Google Sheets write failed, but CSV file is still available")
-    elif len(significant_horses) > 0:
-        print(f"\n💡 To enable Google Sheets integration:")
-        print(f"   pip install gspread google-auth")
-        print(f"   Then set up Google Cloud credentials")
 
 if __name__ == "__main__":
     predict_race_winners()

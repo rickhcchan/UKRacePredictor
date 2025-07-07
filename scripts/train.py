@@ -167,16 +167,26 @@ calibrator.fit(y_cal_pred, y_train_cal)
 y_pred_base = model.predict(X_test, num_iteration=model.best_iteration)
 y_pred_calibrated = calibrator.predict(y_pred_base)
 
-# Evaluate both models
-def evaluate_model(y_true, y_pred_proba, model_name):
+# Evaluate both models with P&L analysis
+def evaluate_model(y_true, y_pred_proba, test_data_df, model_name):
     print(f"\n{model_name} Performance:")
     print("-" * 40)
     
     auc = roc_auc_score(y_true, y_pred_proba)
     print(f"AUC: {auc:.4f}")
     
-    # Threshold analysis
-    thresholds = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    # Realistic threshold analysis for horse racing (10%-35% in 5% increments)
+    thresholds = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35]
+    
+    # Check if we have decimal odds for P&L calculation
+    has_odds = 'dec' in test_data_df.columns
+    
+    if has_odds:
+        print(f"\n{'Threshold':<10} {'Bets':<6} {'Winners':<8} {'Precision':<10} {'P&L (£1 stakes)':<15} {'ROI':<8}")
+        print("-" * 70)
+    else:
+        print(f"\n{'Threshold':<10} {'Bets':<6} {'Winners':<8} {'Precision':<10} {'Recall':<8}")
+        print("-" * 55)
     
     for threshold in thresholds:
         y_pred_thresh = (y_pred_proba >= threshold).astype(int)
@@ -190,8 +200,40 @@ def evaluate_model(y_true, y_pred_proba, model_name):
         
         predicted_winners = y_pred_thresh.sum()
         
-        print(f"Threshold {threshold:.1f}: Precision={precision:.3f} | Recall={recall:.3f} | "
-              f"Predicted Winners={predicted_winners}")
+        if has_odds and predicted_winners > 0:
+            # Calculate actual P&L with £1 stakes
+            bet_mask = y_pred_thresh == 1
+            bet_outcomes = y_true[bet_mask]
+            bet_odds = test_data_df.loc[bet_mask, 'dec']
+            
+            # P&L calculation: win = (dec - 1), lose = -1
+            pnl = 0
+            valid_bets = 0
+            for outcome, odds in zip(bet_outcomes, bet_odds):
+                # Skip if odds are invalid/missing
+                if pd.isna(odds) or odds <= 0:
+                    continue
+                valid_bets += 1
+                if outcome == 1:  # Winner
+                    pnl += (odds - 1)  # Profit = (decimal odds - 1)
+                else:  # Loser
+                    pnl += -1  # Loss = stake
+            
+            if valid_bets > 0:
+                roi = (pnl / valid_bets) * 100
+                print(f"{threshold:.0%}        {valid_bets:<6} {tp:<8} {precision:.3f}      "
+                      f"£{pnl:>+7.2f}        {roi:>+6.1f}%")
+            else:
+                print(f"{threshold:.0%}        {predicted_winners:<6} {tp:<8} {precision:.3f}      "
+                      f"No valid odds    N/A")
+        else:
+            print(f"{threshold:.0%}        {predicted_winners:<6} {tp:<8} {precision:.3f}      {recall:.3f}")
+    
+    if has_odds:
+        print(f"\nP&L = Profit/Loss with £1 stake per bet")
+        print(f"ROI = Return on Investment (P&L ÷ Total Stakes × 100%)")
+    
+    return y_pred_thresh
 
 # Check calibration improvement
 def check_calibration(y_true, y_pred_proba, model_name):
@@ -222,9 +264,12 @@ def check_calibration(y_true, y_pred_proba, model_name):
     
     return mean_error
 
-# Evaluate both models
-evaluate_model(y_test, y_pred_base, "BASE MODEL (Uncalibrated)")
-evaluate_model(y_test, y_pred_calibrated, "CALIBRATED MODEL")
+# Prepare test dataframe for P&L analysis
+df_test = df[test_mask].reset_index(drop=True)
+
+# Evaluate both models with P&L analysis
+evaluate_model(y_test, y_pred_base, df_test, "BASE MODEL (Uncalibrated)")
+evaluate_model(y_test, y_pred_calibrated, df_test, "CALIBRATED MODEL")
 
 base_calib_error = check_calibration(y_test, y_pred_base, "BASE MODEL")
 calibrated_calib_error = check_calibration(y_test, y_pred_calibrated, "CALIBRATED MODEL")
@@ -285,6 +330,87 @@ importance_file = model_dir / f"feature_importance_{model_version}.csv"
 feature_importance.to_csv(importance_file, index=False)
 print(f"Feature importance saved to {importance_file}")
 
+# Betting Strategy Summary (only if we have odds data)
+if 'dec' in df_test.columns:
+    print(f"\n💰 BETTING STRATEGY ANALYSIS:")
+    print("=" * 50)
+    
+    # Re-calculate P&L for key thresholds to show summary
+    key_thresholds = [0.10, 0.15, 0.20, 0.25, 0.30, 0.35]
+    
+    print(f"Key threshold analysis for £1 stakes:")
+    best_pnl = -float('inf')
+    best_threshold = 0.15
+    
+    for threshold in key_thresholds:
+        y_pred_thresh = (y_pred_calibrated >= threshold).astype(int)
+        predicted_winners = y_pred_thresh.sum()
+        
+        if predicted_winners > 0:
+            bet_mask = y_pred_thresh == 1
+            bet_outcomes = y_test[bet_mask]
+            bet_odds = df_test.loc[bet_mask, 'dec']
+            
+            pnl = 0
+            valid_bets = 0
+            for outcome, odds in zip(bet_outcomes, bet_odds):
+                # Skip if odds are invalid/missing
+                if pd.isna(odds) or odds <= 0:
+                    continue
+                valid_bets += 1
+                if outcome == 1:
+                    pnl += (odds - 1)
+                else:
+                    pnl += -1
+            
+            if valid_bets > 0:
+                precision = sum(bet_outcomes) / len(bet_outcomes) if len(bet_outcomes) > 0 else 0
+                roi = (pnl / valid_bets) * 100
+                
+                status = "✅ PROFITABLE" if pnl > 0 else "❌ Loss"
+                print(f"  {threshold:.0%}: P&L = £{pnl:+7.2f} | ROI = {roi:+6.1f}% | {status}")
+                
+                if pnl > best_pnl:
+                    best_pnl = pnl
+                    best_threshold = threshold
+            else:
+                print(f"  {threshold:.0%}: No valid odds data")
+    
+    print(f"\n🎯 CURRENT STRATEGY (15% threshold):")
+    current_thresh = (y_pred_calibrated >= 0.15).astype(int)
+    if current_thresh.sum() > 0:
+        current_mask = current_thresh == 1
+        current_outcomes = y_test[current_mask]
+        current_odds = df_test.loc[current_mask, 'dec']
+        
+        current_pnl = 0
+        valid_current_bets = 0
+        for outcome, odds in zip(current_outcomes, current_odds):
+            # Skip if odds are invalid/missing
+            if pd.isna(odds) or odds <= 0:
+                continue
+            valid_current_bets += 1
+            if outcome == 1:
+                current_pnl += (odds - 1)
+            else:
+                current_pnl += -1
+        
+        if valid_current_bets > 0:
+            current_roi = (current_pnl / valid_current_bets) * 100
+            current_precision = sum(current_outcomes) / len(current_outcomes)
+            
+            print(f"  • Total P&L: £{current_pnl:+.2f}")
+            print(f"  • ROI: {current_roi:+.1f}%")
+            print(f"  • Precision: {current_precision:.1%}")
+            print(f"  • Valid bets: {valid_current_bets} (of {current_thresh.sum()} total)")
+            
+            if current_pnl > 0:
+                print(f"  ✅ Your 15% strategy is PROFITABLE!")
+            else:
+                print(f"  ⚠️  Consider trying {best_threshold:.0%} threshold (best P&L: £{best_pnl:+.2f})")
+        else:
+            print(f"  ❌ No valid odds data for current strategy")
+
 print(f"\n🎯 SUMMARY:")
 print(f"✅ Model version: {model_version}")
 if experiment_name:
@@ -300,3 +426,50 @@ print(f"   1. Load the base model: lightgbm_model_{model_version}.pkl")
 print(f"   2. Load the calibrator: probability_calibrator_{model_version}.pkl")
 print(f"   3. Use: calibrator.predict(model.predict(X))")
 print(f"\nTraining completed successfully!")
+
+# Betting Strategy Analysis Summary
+print(f"\n🎯 BETTING STRATEGY ANALYSIS:")
+print("=" * 50)
+
+def analyze_betting_strategy(y_true, y_pred_calibrated):
+    """Analyze key thresholds for betting strategy decisions"""
+    
+    # Key thresholds to focus on for betting decisions
+    key_thresholds = [0.15, 0.20, 0.25, 0.30]
+    
+    print("Threshold | Precision | Recall | Bets Made | Win Rate | Daily Bets*")
+    print("-" * 65)
+    
+    best_precision = 0
+    best_threshold = 0
+    
+    for threshold in key_thresholds:
+        y_pred_thresh = (y_pred_calibrated >= threshold).astype(int)
+        
+        tp = ((y_pred_thresh == 1) & (y_true == 1)).sum()
+        fp = ((y_pred_thresh == 1) & (y_true == 0)).sum()
+        
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fp + ((y_pred_thresh == 0) & (y_true == 1)).sum()) if (tp + fp + ((y_pred_thresh == 0) & (y_true == 1)).sum()) > 0 else 0
+        
+        predicted_winners = y_pred_thresh.sum()
+        win_rate = precision  # Win rate = precision for betting
+        
+        # Rough estimate of daily bets (total_races / races_per_day)
+        total_test_horses = len(y_true)
+        estimated_daily_bets = predicted_winners * (50 / (total_test_horses / 8))  # Rough calculation
+        
+        print(f"  {threshold:.2f}   |   {precision:.3f}   |  {recall:.3f}  |   {predicted_winners:4d}    |  {win_rate:.3f}  |    {estimated_daily_bets:.1f}")
+        
+        if precision > best_precision:
+            best_precision = precision
+            best_threshold = threshold
+    
+    print(f"\n💡 RECOMMENDATIONS:")
+    print(f"• Your current 15% threshold: {best_threshold == 0.15 and '✅ Optimal!' or '⚠️ Consider alternatives'}")
+    print(f"• Best precision achieved at {best_threshold:.2f}% threshold: {best_precision:.3f}")
+    print(f"• For conservative betting: Consider 25-30% threshold")
+    print(f"• For aggressive betting: Consider 15-20% threshold")
+    print(f"• Current strategy precision expectation: ~{[p for t, p in zip(key_thresholds, [((y_pred_calibrated >= t).astype(int) * y_true).sum() / (y_pred_calibrated >= t).sum() if (y_pred_calibrated >= t).sum() > 0 else 0 for t in key_thresholds]) if t == 0.15][0]:.3f}")
+
+analyze_betting_strategy(y_test, y_pred_calibrated)

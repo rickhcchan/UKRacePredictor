@@ -62,8 +62,18 @@ jockey_history = defaultdict(list)
 trainer_history = defaultdict(list)
 
 win_pct_columns = [
-    'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct',
-    'jockey_win_pct', 'trainer_win_pct',
+    'horse_total_runs', 'horse_total_wins', 'horse_win_pct',
+    'horse_course_runs', 'horse_course_wins', 'horse_course_win_pct', 
+    'horse_distance_runs', 'horse_distance_wins', 'horse_distance_win_pct', 
+    'horse_going_runs', 'horse_going_wins', 'horse_going_win_pct',
+    'jockey_total_runs', 'jockey_total_wins', 'jockey_win_pct',
+    'jockey_course_runs', 'jockey_course_wins', 'jockey_course_win_pct',
+    'jockey_distance_runs', 'jockey_distance_wins', 'jockey_distance_win_pct',
+    'jockey_going_runs', 'jockey_going_wins', 'jockey_going_win_pct',
+    'trainer_total_runs', 'trainer_total_wins', 'trainer_win_pct',
+    'trainer_course_runs', 'trainer_course_wins', 'trainer_course_win_pct',
+    'trainer_distance_runs', 'trainer_distance_wins', 'trainer_distance_win_pct',
+    'trainer_going_runs', 'trainer_going_wins', 'trainer_going_win_pct',
     'jockey_14d_runs', 'jockey_14d_wins', 'jockey_14d_win_pct',
     'trainer_14d_runs', 'trainer_14d_wins', 'trainer_14d_win_pct',
     'jockey_14d_type_runs', 'jockey_14d_type_wins', 'jockey_14d_type_win_pct',
@@ -87,25 +97,112 @@ for idx, row in merged_df.iterrows():
     jockey_records = jockey_history[jockey_id]
     trainer_records = trainer_history[trainer_id]
     
+    # Horse total (lifetime) statistics
+    horse_total_runs = len(horse_records)
+    horse_total_wins = sum(1 for record in horse_records if record['win'])
+    horse_win_pct = calculate_historical_win_pct(horse_records)
+    merged_df.at[idx, 'horse_total_runs'] = horse_total_runs
+    merged_df.at[idx, 'horse_total_wins'] = horse_total_wins
+    merged_df.at[idx, 'horse_win_pct'] = horse_win_pct
+    
+    # Horse course-specific statistics
     course_records = [r for r in horse_records if r['course'] == course]
+    horse_course_runs = len(course_records)
+    horse_course_wins = sum(1 for record in course_records if record['win'])
     course_win_pct = calculate_historical_win_pct(course_records)
+    merged_df.at[idx, 'horse_course_runs'] = horse_course_runs
+    merged_df.at[idx, 'horse_course_wins'] = horse_course_wins
     merged_df.at[idx, 'horse_course_win_pct'] = course_win_pct
     
+    # Horse distance-specific statistics
     distance_records = [r for r in horse_records if r['dist_f'] == dist_f]
+    horse_distance_runs = len(distance_records)
+    horse_distance_wins = sum(1 for record in distance_records if record['win'])
     distance_win_pct = calculate_historical_win_pct(distance_records)
+    merged_df.at[idx, 'horse_distance_runs'] = horse_distance_runs
+    merged_df.at[idx, 'horse_distance_wins'] = horse_distance_wins
     merged_df.at[idx, 'horse_distance_win_pct'] = distance_win_pct
     
+    # Horse going-specific statistics
     going_records = [r for r in horse_records if r['going'] == going]
+    horse_going_runs = len(going_records)
+    horse_going_wins = sum(1 for record in going_records if record['win'])
     going_win_pct = calculate_historical_win_pct(going_records)
+    merged_df.at[idx, 'horse_going_runs'] = horse_going_runs
+    merged_df.at[idx, 'horse_going_wins'] = horse_going_wins
     merged_df.at[idx, 'horse_going_win_pct'] = going_win_pct
     
+    # Jockey lifetime statistics
     historical_jockey_records = [r for r in jockey_records]
+    jockey_total_runs = len(historical_jockey_records)
+    jockey_total_wins = sum(1 for r in historical_jockey_records if r['win'])
     jockey_win_pct = calculate_historical_win_pct(historical_jockey_records)
+    merged_df.at[idx, 'jockey_total_runs'] = jockey_total_runs
+    merged_df.at[idx, 'jockey_total_wins'] = jockey_total_wins
     merged_df.at[idx, 'jockey_win_pct'] = jockey_win_pct
     
+    # Jockey course-specific statistics
+    jockey_course_records = [r for r in jockey_records if r['course'] == course]
+    jockey_course_runs = len(jockey_course_records)
+    jockey_course_wins = sum(1 for r in jockey_course_records if r['win'])
+    jockey_course_win_pct = calculate_historical_win_pct(jockey_course_records)
+    merged_df.at[idx, 'jockey_course_runs'] = jockey_course_runs
+    merged_df.at[idx, 'jockey_course_wins'] = jockey_course_wins
+    merged_df.at[idx, 'jockey_course_win_pct'] = jockey_course_win_pct
+    
+    # Jockey distance-specific statistics
+    jockey_distance_records = [r for r in jockey_records if r['dist_f'] == dist_f]
+    jockey_distance_runs = len(jockey_distance_records)
+    jockey_distance_wins = sum(1 for r in jockey_distance_records if r['win'])
+    jockey_distance_win_pct = calculate_historical_win_pct(jockey_distance_records)
+    merged_df.at[idx, 'jockey_distance_runs'] = jockey_distance_runs
+    merged_df.at[idx, 'jockey_distance_wins'] = jockey_distance_wins
+    merged_df.at[idx, 'jockey_distance_win_pct'] = jockey_distance_win_pct
+    
+    # Jockey going-specific statistics
+    jockey_going_records = [r for r in jockey_records if r['going'] == going]
+    jockey_going_runs = len(jockey_going_records)
+    jockey_going_wins = sum(1 for r in jockey_going_records if r['win'])
+    jockey_going_win_pct = calculate_historical_win_pct(jockey_going_records)
+    merged_df.at[idx, 'jockey_going_runs'] = jockey_going_runs
+    merged_df.at[idx, 'jockey_going_wins'] = jockey_going_wins
+    merged_df.at[idx, 'jockey_going_win_pct'] = jockey_going_win_pct
+    
+    # Trainer lifetime statistics
     historical_trainer_records = [r for r in trainer_records]
+    trainer_total_runs = len(historical_trainer_records)
+    trainer_total_wins = sum(1 for r in historical_trainer_records if r['win'])
     trainer_win_pct = calculate_historical_win_pct(historical_trainer_records)
+    merged_df.at[idx, 'trainer_total_runs'] = trainer_total_runs
+    merged_df.at[idx, 'trainer_total_wins'] = trainer_total_wins
     merged_df.at[idx, 'trainer_win_pct'] = trainer_win_pct
+    
+    # Trainer course-specific statistics
+    trainer_course_records = [r for r in trainer_records if r['course'] == course]
+    trainer_course_runs = len(trainer_course_records)
+    trainer_course_wins = sum(1 for r in trainer_course_records if r['win'])
+    trainer_course_win_pct = calculate_historical_win_pct(trainer_course_records)
+    merged_df.at[idx, 'trainer_course_runs'] = trainer_course_runs
+    merged_df.at[idx, 'trainer_course_wins'] = trainer_course_wins
+    merged_df.at[idx, 'trainer_course_win_pct'] = trainer_course_win_pct
+    
+    # Trainer distance-specific statistics
+    trainer_distance_records = [r for r in trainer_records if r['dist_f'] == dist_f]
+    trainer_distance_runs = len(trainer_distance_records)
+    trainer_distance_wins = sum(1 for r in trainer_distance_records if r['win'])
+    trainer_distance_win_pct = calculate_historical_win_pct(trainer_distance_records)
+    merged_df.at[idx, 'trainer_distance_runs'] = trainer_distance_runs
+    merged_df.at[idx, 'trainer_distance_wins'] = trainer_distance_wins
+    merged_df.at[idx, 'trainer_distance_win_pct'] = trainer_distance_win_pct
+    
+    # Trainer going-specific statistics
+    trainer_going_records = [r for r in trainer_records if r['going'] == going]
+    trainer_going_runs = len(trainer_going_records)
+    trainer_going_wins = sum(1 for r in trainer_going_records if r['win'])
+    trainer_going_win_pct = calculate_historical_win_pct(trainer_going_records)
+    merged_df.at[idx, 'trainer_going_runs'] = trainer_going_runs
+    merged_df.at[idx, 'trainer_going_wins'] = trainer_going_wins
+    merged_df.at[idx, 'trainer_going_win_pct'] = trainer_going_win_pct
     
     jockey_14d_win_pct, jockey_14d_runs, jockey_14d_wins = calculate_14d_win_pct_from_history(jockey_records, row['datetime'])
     merged_df.at[idx, 'jockey_14d_runs'] = jockey_14d_runs
@@ -140,14 +237,20 @@ for idx, row in merged_df.iterrows():
     jockey_record = {
         'win': win,
         'datetime': row['datetime'],
-        'type': race_type
+        'type': race_type,
+        'course': course,
+        'dist_f': dist_f,
+        'going': going
     }
     jockey_history[jockey_id].append(jockey_record)
     
     trainer_record = {
         'win': win,
         'datetime': row['datetime'],
-        'type': race_type
+        'type': race_type,
+        'course': course,
+        'dist_f': dist_f,
+        'going': going
     }
     trainer_history[trainer_id].append(trainer_record)
 

@@ -88,12 +88,45 @@ for course_name, races in courses.items():
         runners = race_info.get("runners", [])
         for runner in runners:
 
-            # Initialize all win percentages
+            # Initialize all win percentages and counts for all enhanced features
+            horse_total_runs = 0.0
+            horse_total_wins = 0.0
+            horse_win_pct = -1.0
+            horse_course_runs = 0.0
+            horse_course_wins = 0.0
             horse_course_win_pct = -1.0
+            horse_distance_runs = 0.0
+            horse_distance_wins = 0.0
             horse_distance_win_pct = -1.0
+            horse_going_runs = 0.0
+            horse_going_wins = 0.0
             horse_going_win_pct = -1.0
+            
+            jockey_total_runs = 0.0
+            jockey_total_wins = 0.0
             jockey_win_pct = -1.0
+            jockey_course_runs = 0.0
+            jockey_course_wins = 0.0
+            jockey_course_win_pct = -1.0
+            jockey_distance_runs = 0.0
+            jockey_distance_wins = 0.0
+            jockey_distance_win_pct = -1.0
+            jockey_going_runs = 0.0
+            jockey_going_wins = 0.0
+            jockey_going_win_pct = -1.0
+            
+            trainer_total_runs = 0.0
+            trainer_total_wins = 0.0
             trainer_win_pct = -1.0
+            trainer_course_runs = 0.0
+            trainer_course_wins = 0.0
+            trainer_course_win_pct = -1.0
+            trainer_distance_runs = 0.0
+            trainer_distance_wins = 0.0
+            trainer_distance_win_pct = -1.0
+            trainer_going_runs = 0.0
+            trainer_going_wins = 0.0
+            trainer_going_win_pct = -1.0
 
             # Calculate all statistics from encoded data only
             if encoded_data is not None:
@@ -107,36 +140,118 @@ for course_name, races in courses.items():
                     horse_records = encoded_data[encoded_data['horse_id'] == horse_id]
                     
                     if len(horse_records) > 0:
-                        # Course-specific win percentage - SKIP for now (would need course column in encoded data)
-                        # track_id combines course+distance, so can't separate course-only stats
-                        horse_course_win_pct = -1.0
+                        # Total (lifetime) statistics
+                        horse_total_runs = len(horse_records)
+                        horse_total_wins = (horse_records['win'] == 1).sum()
+                        horse_win_pct = horse_total_wins / horse_total_runs
+                        
+                        # Course-specific statistics using track_id mapping
+                        # Find all track_ids that belong to this course
+                        current_course = course_name
+                        course_track_ids = [track_id for track_name, track_id in track_mapping.items() 
+                                          if track_name.startswith(current_course + '_')]
+                        
+                        horse_course_records = horse_records[horse_records['track_id'].isin(course_track_ids)]
+                        horse_course_runs = len(horse_course_records)
+                        if horse_course_runs > 0:
+                            horse_course_wins = (horse_course_records['win'] == 1).sum()
+                            horse_course_win_pct = horse_course_wins / horse_course_runs
+                        else:
+                            horse_course_wins = 0.0
+                            horse_course_win_pct = -1.0
                         
                         # Distance-specific win percentage for this specific distance
                         distance_records = horse_records[horse_records['dist_f'] == race_info.get('distance_f')]
-                        if len(distance_records) > 0:
-                            distance_wins = (distance_records['win'] == 1).sum()
-                            horse_distance_win_pct = distance_wins / len(distance_records)
+                        horse_distance_runs = len(distance_records)
+                        if horse_distance_runs > 0:
+                            horse_distance_wins = (distance_records['win'] == 1).sum()
+                            horse_distance_win_pct = horse_distance_wins / horse_distance_runs
                         
                         # Going-specific win percentage for this specific going
                         going_id = going_map.get(race_info.get('going'), 3)
                         going_records = horse_records[horse_records['going'] == going_id]
-                        if len(going_records) > 0:
-                            going_wins = (going_records['win'] == 1).sum()
-                            horse_going_win_pct = going_wins / len(going_records)
+                        horse_going_runs = len(going_records)
+                        if horse_going_runs > 0:
+                            horse_going_wins = (going_records['win'] == 1).sum()
+                            horse_going_win_pct = horse_going_wins / horse_going_runs
                 
-                # Jockey lifetime win percentage from encoded data only
+                # Jockey statistics from encoded data
                 if jockey_id != -1:
                     jockey_records = encoded_data[encoded_data['jockey_id'] == jockey_id]
                     if len(jockey_records) > 0:
-                        jockey_wins = (jockey_records['win'] == 1).sum()
-                        jockey_win_pct = jockey_wins / len(jockey_records)
+                        # Total (lifetime) statistics
+                        jockey_total_runs = len(jockey_records)
+                        jockey_total_wins = (jockey_records['win'] == 1).sum()
+                        jockey_win_pct = jockey_total_wins / jockey_total_runs
+                        
+                        # Course-specific statistics using track_id mapping
+                        # Find all track_ids that belong to this course
+                        current_course = course_name
+                        course_track_ids = [track_id for track_name, track_id in track_mapping.items() 
+                                          if track_name.startswith(current_course + '_')]
+                        
+                        jockey_course_records = jockey_records[jockey_records['track_id'].isin(course_track_ids)]
+                        jockey_course_runs = len(jockey_course_records)
+                        if jockey_course_runs > 0:
+                            jockey_course_wins = (jockey_course_records['win'] == 1).sum()
+                            jockey_course_win_pct = jockey_course_wins / jockey_course_runs
+                        else:
+                            jockey_course_wins = 0.0
+                            jockey_course_win_pct = -1.0
+                        
+                        # Distance-specific statistics
+                        jockey_distance_records = jockey_records[jockey_records['dist_f'] == race_info.get('distance_f')]
+                        jockey_distance_runs = len(jockey_distance_records)
+                        if jockey_distance_runs > 0:
+                            jockey_distance_wins = (jockey_distance_records['win'] == 1).sum()
+                            jockey_distance_win_pct = jockey_distance_wins / jockey_distance_runs
+                        
+                        # Going-specific statistics
+                        going_id = going_map.get(race_info.get('going'), 3)
+                        jockey_going_records = jockey_records[jockey_records['going'] == going_id]
+                        jockey_going_runs = len(jockey_going_records)
+                        if jockey_going_runs > 0:
+                            jockey_going_wins = (jockey_going_records['win'] == 1).sum()
+                            jockey_going_win_pct = jockey_going_wins / jockey_going_runs
                 
-                # Trainer lifetime win percentage from encoded data only
+                # Trainer statistics from encoded data
                 if trainer_id != -1:
                     trainer_records = encoded_data[encoded_data['trainer_id'] == trainer_id]
                     if len(trainer_records) > 0:
-                        trainer_wins = (trainer_records['win'] == 1).sum()
-                        trainer_win_pct = trainer_wins / len(trainer_records)
+                        # Total (lifetime) statistics
+                        trainer_total_runs = len(trainer_records)
+                        trainer_total_wins = (trainer_records['win'] == 1).sum()
+                        trainer_win_pct = trainer_total_wins / trainer_total_runs
+                        
+                        # Course-specific statistics using track_id mapping
+                        # Find all track_ids that belong to this course
+                        current_course = course_name
+                        course_track_ids = [track_id for track_name, track_id in track_mapping.items() 
+                                          if track_name.startswith(current_course + '_')]
+                        
+                        trainer_course_records = trainer_records[trainer_records['track_id'].isin(course_track_ids)]
+                        trainer_course_runs = len(trainer_course_records)
+                        if trainer_course_runs > 0:
+                            trainer_course_wins = (trainer_course_records['win'] == 1).sum()
+                            trainer_course_win_pct = trainer_course_wins / trainer_course_runs
+                        else:
+                            trainer_course_wins = 0.0
+                            trainer_course_win_pct = -1.0
+                        
+                        # Distance-specific statistics
+                        trainer_distance_records = trainer_records[trainer_records['dist_f'] == race_info.get('distance_f')]
+                        trainer_distance_runs = len(trainer_distance_records)
+                        if trainer_distance_runs > 0:
+                            trainer_distance_wins = (trainer_distance_records['win'] == 1).sum()
+                            trainer_distance_win_pct = trainer_distance_wins / trainer_distance_runs
+                        
+                        # Going-specific statistics
+                        going_id = going_map.get(race_info.get('going'), 3)
+                        trainer_going_records = trainer_records[trainer_records['going'] == going_id]
+                        trainer_going_runs = len(trainer_going_records)
+                        if trainer_going_runs > 0:
+                            trainer_going_wins = (trainer_going_records['win'] == 1).sum()
+                            trainer_going_win_pct = trainer_going_wins / trainer_going_runs
                 
                 # Calculate overall 14-day stats (all race types)
                 stats_overall = calculate_14d_stats_from_encoded(
@@ -224,11 +339,42 @@ for course_name, races in courses.items():
                 'age_band': race_info.get('age_band', ''),
                 'course': course_name,
                 'date': today,
+                'horse_total_runs': horse_total_runs,
+                'horse_total_wins': horse_total_wins,
+                'horse_win_pct': horse_win_pct,
+                'horse_course_runs': horse_course_runs,
+                'horse_course_wins': horse_course_wins,
                 'horse_course_win_pct': horse_course_win_pct,
+                'horse_distance_runs': horse_distance_runs,
+                'horse_distance_wins': horse_distance_wins,
                 'horse_distance_win_pct': horse_distance_win_pct,
+                'horse_going_runs': horse_going_runs,
+                'horse_going_wins': horse_going_wins,
                 'horse_going_win_pct': horse_going_win_pct,
+                'jockey_total_runs': jockey_total_runs,
+                'jockey_total_wins': jockey_total_wins,
                 'jockey_win_pct': jockey_win_pct,
+                'jockey_course_runs': jockey_course_runs,
+                'jockey_course_wins': jockey_course_wins,
+                'jockey_course_win_pct': jockey_course_win_pct,
+                'jockey_distance_runs': jockey_distance_runs,
+                'jockey_distance_wins': jockey_distance_wins,
+                'jockey_distance_win_pct': jockey_distance_win_pct,
+                'jockey_going_runs': jockey_going_runs,
+                'jockey_going_wins': jockey_going_wins,
+                'jockey_going_win_pct': jockey_going_win_pct,
+                'trainer_total_runs': trainer_total_runs,
+                'trainer_total_wins': trainer_total_wins,
                 'trainer_win_pct': trainer_win_pct,
+                'trainer_course_runs': trainer_course_runs,
+                'trainer_course_wins': trainer_course_wins,
+                'trainer_course_win_pct': trainer_course_win_pct,
+                'trainer_distance_runs': trainer_distance_runs,
+                'trainer_distance_wins': trainer_distance_wins,
+                'trainer_distance_win_pct': trainer_distance_win_pct,
+                'trainer_going_runs': trainer_going_runs,
+                'trainer_going_wins': trainer_going_wins,
+                'trainer_going_win_pct': trainer_going_win_pct,
                 'jockey_14d_runs': jockey_14d_runs,
                 'jockey_14d_wins': jockey_14d_wins,
                 'jockey_14d_win_pct': jockey_14d_win_pct,
@@ -268,8 +414,18 @@ clean_prediction_cols = [
     'horse_id', 'horse_name', 'age', 'sex', 'lbs', 'hg', 'jockey_id', 'trainer_id', 
     'sire_id', 'dam_id', 'damsire_id', 'owner_id',
     'month_sin', 'month_cos', 'track_id', 'age_min', 'age_max', 'rating_max',
-    'horse_course_win_pct', 'horse_distance_win_pct', 'horse_going_win_pct',
-    'jockey_win_pct', 'trainer_win_pct',
+    'horse_total_runs', 'horse_total_wins', 'horse_win_pct',
+    'horse_course_runs', 'horse_course_wins', 'horse_course_win_pct',
+    'horse_distance_runs', 'horse_distance_wins', 'horse_distance_win_pct',
+    'horse_going_runs', 'horse_going_wins', 'horse_going_win_pct',
+    'jockey_total_runs', 'jockey_total_wins', 'jockey_win_pct',
+    'jockey_course_runs', 'jockey_course_wins', 'jockey_course_win_pct',
+    'jockey_distance_runs', 'jockey_distance_wins', 'jockey_distance_win_pct',
+    'jockey_going_runs', 'jockey_going_wins', 'jockey_going_win_pct',
+    'trainer_total_runs', 'trainer_total_wins', 'trainer_win_pct',
+    'trainer_course_runs', 'trainer_course_wins', 'trainer_course_win_pct',
+    'trainer_distance_runs', 'trainer_distance_wins', 'trainer_distance_win_pct',
+    'trainer_going_runs', 'trainer_going_wins', 'trainer_going_win_pct',
     'jockey_14d_runs', 'jockey_14d_wins', 'jockey_14d_win_pct',
     'trainer_14d_runs', 'trainer_14d_wins', 'trainer_14d_win_pct',
     'jockey_14d_type_runs', 'jockey_14d_type_wins', 'jockey_14d_type_win_pct',
