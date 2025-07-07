@@ -27,7 +27,7 @@ def parse_arguments():
 
 # Define feature categories - REMOVED POTENTIALLY LEAKY FEATURES
 identifier_features = [
-    'race_id', 'horse_id', 'jockey_id', 'trainer_id', 'owner_id'
+    'race_id', 'horse_id', 'jockey_id', 'trainer_id', 'owner_id', 'horse', 'course'
 ]
 
 categorical_features = [
