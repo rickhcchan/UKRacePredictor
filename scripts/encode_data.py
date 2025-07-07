@@ -271,7 +271,7 @@ save_mapping(track_mapping, 'track_mapping.json')
 
 merged_df['dist_f'] = merged_df['dist_f'].str.rstrip('f').astype(float)
 
-merged_df.drop(columns=['course', 'course_id', 'dist', 'dist_m'], inplace=True, errors='ignore')
+merged_df.drop(columns=['course_id', 'dist', 'dist_m'], inplace=True, errors='ignore')
 
 # race_id, off, race_name
 merged_df.drop(columns=['off', 'race_name'], inplace=True, errors='ignore')
@@ -309,7 +309,8 @@ merged_df.drop(columns=['ovr_btn', 'btn'], inplace=True, errors='ignore')
 
 merged_df['sex'] = merged_df['sex'].map(sex_map)
 
-merged_df.drop(columns=['horse'], inplace=True, errors='ignore')
+# Keep 'horse' column for display purposes
+# merged_df['horse'] is already present, no need to rename
 
 # lbs, hg
 merged_df['hg'] = merged_df['hg'].apply(map_hg)

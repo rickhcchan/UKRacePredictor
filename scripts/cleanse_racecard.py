@@ -321,7 +321,7 @@ for course_name, races in courses.items():
                 'ran': len(race_info.get("runners", [])),
                 'draw': int(runner.get('draw', -1)),
                 'horse_id': horse_id,
-                'horse_name': runner.get('name', ''),
+                'horse': runner.get('name', ''),
                 'age': int(runner.get('age')),
                 'sex': sex_map.get(runner.get('sex_code'), -1),
                 'lbs': int(runner.get('lbs', 0)),
@@ -411,7 +411,7 @@ df.drop(columns=['course', 'date', 'month', 'rating_band', 'age_band'], inplace=
 # Define final columns for model input
 clean_prediction_cols = [
     'race_id', 'type_id', 'class', 'pattern', 'dist_f', 'going', 'ran', 'draw',
-    'horse_id', 'horse_name', 'age', 'sex', 'lbs', 'hg', 'jockey_id', 'trainer_id', 
+    'horse_id', 'horse', 'age', 'sex', 'lbs', 'hg', 'jockey_id', 'trainer_id', 
     'sire_id', 'dam_id', 'damsire_id', 'owner_id',
     'month_sin', 'month_cos', 'track_id', 'age_min', 'age_max', 'rating_max',
     'horse_total_runs', 'horse_total_wins', 'horse_win_pct',
