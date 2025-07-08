@@ -51,8 +51,9 @@ except ImportError:
         return logging.getLogger(__name__)
 
 class IncrementalEncoder:
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, test_days: Optional[int] = None):
         self.dry_run = dry_run
+        self.test_days = test_days
         self.logger = setup_logging()
         
         # Load configuration
@@ -70,13 +71,12 @@ class IncrementalEncoder:
         self.jockey_history = defaultdict(list)
         self.trainer_history = defaultdict(list)
         
-        # Feature mappings
+        # Feature mappings (loaded from/saved to database)
+        # Note: pattern and going use hardcoded ordinal mappings, not stored in DB
         self.mappings = {
-            'going': {},
-            'pattern': {},
             'sex': {},
             'type': {},
-            'track': {}
+            'course': {}
         }
 
     def _get_config_value(self, section: str, key: str, default: str = None) -> str:
@@ -130,6 +130,7 @@ class IncrementalEncoder:
                     
                     -- Basic race features
                     course TEXT,
+                    course_id INTEGER,
                     race_name TEXT,
                     type_id INTEGER,
                     class TEXT,
@@ -140,7 +141,6 @@ class IncrementalEncoder:
                     dist_f REAL,
                     going_id INTEGER,
                     ran INTEGER,
-                    track_id INTEGER,
                     
                     -- Time features
                     month_sin REAL,
@@ -167,6 +167,7 @@ class IncrementalEncoder:
                     horse_going_runs INTEGER,
                     horse_going_wins INTEGER,
                     horse_going_win_pct REAL,
+                    horse_days_since_last_run INTEGER,
                     
                     -- Jockey features
                     jockey_id INTEGER,
@@ -229,13 +230,70 @@ class IncrementalEncoder:
                 )
             """)
             
+            # Create mappings table for categorical features
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS feature_mappings (
+                    mapping_type TEXT,
+                    value TEXT,
+                    mapped_id INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (mapping_type, value)
+                )
+            """)
+            
             # Create indexes for performance
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{self.encoded_table}_date ON {self.encoded_table}(date)")
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{self.encoded_table}_horse ON {self.encoded_table}(horse_id)")
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{self.encoded_table}_race ON {self.encoded_table}(race_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_feature_mappings_type ON feature_mappings(mapping_type)")
             
             conn.commit()
             self.logger.info(f"Encoded table {self.encoded_table} initialized successfully")
+            self.logger.info("Feature mappings table initialized successfully")
+
+    def load_mappings_from_db(self):
+        """Load existing mappings from database."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT mapping_type, value, mapped_id FROM feature_mappings ORDER BY mapping_type, mapped_id")
+            rows = cursor.fetchall()
+            
+        # Build mappings dictionary
+        mapping_counts = {}
+        for mapping_type, value, mapped_id in rows:
+            if mapping_type not in self.mappings:
+                self.mappings[mapping_type] = {}
+            self.mappings[mapping_type][value] = mapped_id
+            mapping_counts[mapping_type] = mapping_counts.get(mapping_type, 0) + 1
+            
+        if mapping_counts:
+            self.logger.info(f"Loaded existing mappings: {mapping_counts}")
+        else:
+            self.logger.info("No existing mappings found, starting fresh")
+
+    def save_mappings_to_db(self):
+        """Save current mappings to database."""
+        if self.dry_run:
+            self.logger.info("[DRY RUN] Would save mappings to database")
+            return
+            
+        new_mappings_inserted = 0
+        with sqlite3.connect(self.db_path) as conn:
+            for mapping_type, mapping_dict in self.mappings.items():
+                for value, mapped_id in mapping_dict.items():
+                    # Use INSERT OR IGNORE to avoid conflicts with existing mappings
+                    cursor = conn.execute("""
+                        INSERT OR IGNORE INTO feature_mappings (mapping_type, value, mapped_id) 
+                        VALUES (?, ?, ?)
+                    """, (mapping_type, value, mapped_id))
+                    # rowcount tells us if the INSERT actually inserted a row (1) or was ignored (0)
+                    new_mappings_inserted += cursor.rowcount
+            conn.commit()
+            
+        total_mappings = sum(len(mapping_dict) for mapping_dict in self.mappings.values())
+        if new_mappings_inserted > 0:
+            self.logger.info(f"Saved {new_mappings_inserted} new mappings to database ({total_mappings} total mappings)")
+        else:
+            self.logger.info(f"No new mappings to save (all {total_mappings} mappings already existed)")
 
     def get_last_encoded_date(self) -> Optional[str]:
         """Get the last complete encoded date."""
@@ -297,7 +355,13 @@ class IncrementalEncoder:
         self.logger.info(f"Loaded {len(df)} historical records for context")
         
         # Build historical tracking
-        for _, row in df.iterrows():
+        self.logger.info("Building historical tracking for horses, jockeys, and trainers...")
+        progress_interval = 50000  # Log every 50k records
+        
+        for idx, (_, row) in enumerate(df.iterrows()):
+            if idx > 0 and idx % progress_interval == 0:
+                self.logger.info(f"Processed {idx:,} / {len(df):,} historical records ({idx/len(df)*100:.1f}%)")
+            
             horse_id = row['horse_id']
             jockey_id = row['jockey_id']
             trainer_id = row['trainer_id']
@@ -332,6 +396,8 @@ class IncrementalEncoder:
                 'win': win,
                 'date': row['date']
             })
+        
+        self.logger.info(f"Historical tracking complete: {len(self.horse_history)} horses, {len(self.jockey_history)} jockeys, {len(self.trainer_history)} trainers")
 
     def encode_daily_races(self, date_str: str) -> int:
         """Encode all races for a specific date."""
@@ -354,6 +420,28 @@ class IncrementalEncoder:
         
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would encode {len(df)} records for {date_str}")
+            # Still simulate the encoding process to update daily history properly
+            daily_horse_history = defaultdict(list)
+            daily_jockey_history = defaultdict(list)
+            daily_trainer_history = defaultdict(list)
+            
+            for _, row in df.iterrows():
+                # Just simulate the encoding without saving
+                features = self._encode_single_record(row, daily_horse_history, daily_jockey_history, daily_trainer_history)
+                
+                # Update daily history with this race result
+                race_record = {
+                    'date': row['date'],
+                    'win': 1 if (row['pos'] == 1 or row['pos'] == '1') else 0,
+                    'course': row['course'],
+                    'going': row['going'],
+                    'dist_f': row['dist_f'],
+                    'type': row['type']
+                }
+                daily_horse_history[row['horse_id']].append(race_record)
+                daily_jockey_history[row['jockey_id']].append(race_record)
+                daily_trainer_history[row['trainer_id']].append(race_record)
+            
             # Update historical context with this day's results
             self._update_historical_context(df)
             return len(df)
@@ -361,9 +449,27 @@ class IncrementalEncoder:
         # Encode features for all races on this date
         encoded_features = []
         
+        # Track within-day race history for proper same-day calculations
+        daily_horse_history = defaultdict(list)
+        daily_jockey_history = defaultdict(list)
+        daily_trainer_history = defaultdict(list)
+        
         for _, row in df.iterrows():
-            features = self._encode_single_record(row)
+            features = self._encode_single_record(row, daily_horse_history, daily_jockey_history, daily_trainer_history)
             encoded_features.append(features)
+            
+            # Update daily history with this race result
+            race_record = {
+                'date': row['date'],
+                'win': 1 if (row['pos'] == 1 or row['pos'] == '1') else 0,
+                'course': row['course'],
+                'going': row['going'],
+                'dist_f': row['dist_f'],
+                'type': row['type']
+            }
+            daily_horse_history[row['horse_id']].append(race_record)
+            daily_jockey_history[row['jockey_id']].append(race_record)
+            daily_trainer_history[row['trainer_id']].append(race_record)
         
         # Save encoded features to database
         if encoded_features:
@@ -378,7 +484,7 @@ class IncrementalEncoder:
         self.logger.info(f"✓ Encoded {len(encoded_features)} records for {date_str}")
         return len(encoded_features)
 
-    def _encode_single_record(self, row) -> Dict:
+    def _encode_single_record(self, row, daily_horse_history, daily_jockey_history, daily_trainer_history) -> Dict:
         """Encode features for a single race record."""
         horse_id = row['horse_id']
         jockey_id = row['jockey_id']
@@ -389,10 +495,10 @@ class IncrementalEncoder:
         race_type = row['type']
         race_date = row['date']
         
-        # Get historical records
-        horse_records = self.horse_history[horse_id]
-        jockey_records = self.jockey_history[jockey_id]
-        trainer_records = self.trainer_history[trainer_id]
+        # Get historical records (combine historical + daily)
+        horse_records = list(self.horse_history[horse_id]) + daily_horse_history[horse_id]
+        jockey_records = list(self.jockey_history[jockey_id]) + daily_jockey_history[jockey_id]
+        trainer_records = list(self.trainer_history[trainer_id]) + daily_trainer_history[trainer_id]
         
         # Calculate features
         features = {
@@ -402,17 +508,17 @@ class IncrementalEncoder:
             
             # Basic race features
             'course': course,
+            'course_id': self._get_or_create_mapping('course', course),
             'race_name': row['race_name'],
             'type_id': self._get_or_create_mapping('type', race_type),
             'class': row['class'],
-            'pattern_id': self._get_or_create_mapping('pattern', row.get('pattern', 'Unknown')),
+            'pattern_id': self._get_or_create_ordinal_mapping('pattern', row.get('pattern', 'Unknown')),
             'rating_band': row['rating_band'],
             'age_band': row['age_band'],
             'sex_rest': row['sex_rest'],
             'dist_f': float(str(dist_f).rstrip('f')) if pd.notna(dist_f) else 0.0,
-            'going_id': self._get_or_create_mapping('going', going),
+            'going_id': self._get_or_create_ordinal_mapping('going', going),
             'ran': row['ran'],
-            'track_id': self._get_or_create_mapping('track', f"{course}_{dist_f}"),
             
             # Time features
             'month_sin': np.sin(2 * np.pi * pd.to_datetime(race_date).month / 12),
@@ -421,7 +527,7 @@ class IncrementalEncoder:
             # Horse features
             'horse_name': row['horse'],
             'age': row['age'],
-            'sex_id': self._get_or_create_mapping('sex', row['sex']),
+            'sex_id': self._get_or_create_mapping('sex', self._normalize_sex(row['sex'])),
             'lbs': row['lbs'],
             'hg': self._map_hg(row.get('hg')),
             'draw': row['draw'],
@@ -448,13 +554,13 @@ class IncrementalEncoder:
         }
         
         # Calculate historical statistics
-        features.update(self._calculate_horse_stats(horse_records, course, going, dist_f))
+        features.update(self._calculate_horse_stats(horse_records, course, going, dist_f, race_date))
         features.update(self._calculate_jockey_stats(jockey_records, course, going, dist_f, race_type, race_date))
         features.update(self._calculate_trainer_stats(trainer_records, course, going, dist_f, race_type, race_date))
         
         return features
 
-    def _calculate_horse_stats(self, records: List[Dict], course: str, going: str, dist_f: str) -> Dict:
+    def _calculate_horse_stats(self, records: List[Dict], course: str, going: str, dist_f: str, race_date: str) -> Dict:
         """Calculate horse historical statistics."""
         total_runs = len(records)
         total_wins = sum(1 for r in records if r['win'])
@@ -471,6 +577,18 @@ class IncrementalEncoder:
         going_runs = len(going_records)
         going_wins = sum(1 for r in going_records if r['win'])
         
+        # Calculate days since last run
+        # Sort records by date descending to get most recent first
+        if records:
+            sorted_records = sorted(records, key=lambda x: x['date'], reverse=True)
+            last_run_date = sorted_records[0]['date']  # Most recent run
+            race_date_dt = pd.to_datetime(race_date)
+            last_run_date_dt = pd.to_datetime(last_run_date)
+            days_since_last_run = (race_date_dt - last_run_date_dt).days
+        else:
+            # First run for this horse
+            days_since_last_run = -1
+        
         return {
             'horse_total_runs': total_runs,
             'horse_total_wins': total_wins,
@@ -484,6 +602,7 @@ class IncrementalEncoder:
             'horse_going_runs': going_runs,
             'horse_going_wins': going_wins,
             'horse_going_win_pct': (going_wins / going_runs * 100) if going_runs > 0 else -1.0,
+            'horse_days_since_last_run': days_since_last_run,
         }
 
     def _calculate_jockey_stats(self, records: List[Dict], course: str, going: str, dist_f: str, race_type: str, race_date: str) -> Dict:
@@ -503,9 +622,9 @@ class IncrementalEncoder:
         going_runs = len(going_records)
         going_wins = sum(1 for r in going_records if r['win'])
         
-        # 14-day statistics
+        # 14-day statistics (exclude current race date)
         cutoff_date = (pd.to_datetime(race_date) - timedelta(days=14)).strftime('%Y-%m-%d')
-        recent_records = [r for r in records if r['date'] >= cutoff_date]
+        recent_records = [r for r in records if r['date'] >= cutoff_date and r['date'] < race_date]
         recent_runs = len(recent_records)
         recent_wins = sum(1 for r in recent_records if r['win'])
         
@@ -551,9 +670,9 @@ class IncrementalEncoder:
         going_runs = len(going_records)
         going_wins = sum(1 for r in going_records if r['win'])
         
-        # 14-day statistics
+        # 14-day statistics (exclude current race date)
         cutoff_date = (pd.to_datetime(race_date) - timedelta(days=14)).strftime('%Y-%m-%d')
-        recent_records = [r for r in records if r['date'] >= cutoff_date]
+        recent_records = [r for r in records if r['date'] >= cutoff_date and r['date'] < race_date]
         recent_runs = len(recent_records)
         recent_wins = sum(1 for r in recent_records if r['win'])
         
@@ -592,6 +711,53 @@ class IncrementalEncoder:
         
         return self.mappings[mapping_type][value]
 
+    def _get_or_create_ordinal_mapping(self, mapping_type: str, value: str) -> int:
+        """Get or create an ordinal mapping for values with inherent ordering."""
+        if mapping_type == 'pattern':
+            return self._map_pattern(value)
+        elif mapping_type == 'going':
+            return self._map_going(value)
+        else:
+            # Fallback to categorical mapping
+            return self._get_or_create_mapping(mapping_type, value)
+
+    def _map_pattern(self, pattern_value) -> int:
+        """Map pattern values to ordinal integers (1=highest prestige, 5=lowest)."""
+        if pd.isna(pattern_value) or pattern_value == '' or pattern_value == 'Unknown':
+            return 5
+        
+        # Handle both Group and Grade races with same ordinal values
+        pattern_ordinal_map = {
+            'Group 1': 1,    'Grade 1': 1,     # Highest prestige
+            'Group 2': 2,    'Grade 2': 2,     # Second tier
+            'Group 3': 3,    'Grade 3': 3,     # Third tier
+            'Listed': 4,                       # Listed races
+        }
+        
+        return pattern_ordinal_map.get(pattern_value, 5)  # Default to 5 for unknown
+
+    def _map_going(self, going_value) -> int:
+        """Map going values to ordinal integers (1=firm, higher=softer, -1=unknown)."""
+        if pd.isna(going_value) or going_value == '':
+            return -1
+        
+        # Ordinal mapping from firm to soft ground
+        going_ordinal_map = {
+            'Firm': 1,
+            'Good To Firm': 2,
+            'Good': 3,
+            'Standard': 3,           # Equivalent to Good for AW
+            'Good To Soft': 4,
+            'Standard To Slow': 4,   # Equivalent to Good To Soft for AW
+            'Soft': 5,
+            'Heavy': 6,
+            'Slow': 5,               # Equivalent to Soft for AW
+            'Standard To Fast': 2,   # Equivalent to Good To Firm for AW
+            'None': -1
+        }
+        
+        return going_ordinal_map.get(going_value, -1)  # Default to -1 for unknown
+
     def _map_hg(self, hg_value) -> int:
         """Map headgear values to integers."""
         if pd.isna(hg_value) or hg_value == '':
@@ -602,6 +768,37 @@ class IncrementalEncoder:
             return top_hg.index(hg_value) + 1
         else:
             return len(top_hg) + 1
+
+    def _normalize_sex(self, sex_value) -> str:
+        """Normalize sex values to single character codes."""
+        if pd.isna(sex_value) or sex_value == '':
+            return 'Unknown'
+        
+        sex_str = str(sex_value).strip().lower()
+        
+        # Handle full word to single character mapping
+        sex_normalization_map = {
+            # Single characters (already normalized)
+            'g': 'G',
+            'f': 'F', 
+            'm': 'M',
+            'c': 'C',
+            'h': 'H',
+            'r': 'R',
+            
+            # Full words from racecard
+            'gelding': 'G',
+            'filly': 'F',
+            'mare': 'F',  # Mare is also female
+            'colt': 'M',
+            'horse': 'M',  # Male horse
+            'stallion': 'M',
+            'colt or gelding': 'C',  # Could be either
+            'colt or filly': 'C',    # Could be either
+            'rig': 'R'
+        }
+        
+        return sex_normalization_map.get(sex_str, 'Unknown')
 
     def _update_historical_context(self, df: pd.DataFrame):
         """Update historical context with the day's race results."""
@@ -628,8 +825,9 @@ class IncrementalEncoder:
         """Main method to run incremental encoding."""
         self.logger.info("Starting incremental race data encoding")
         
-        # Initialize encoded table
+        # Initialize encoded table and load existing mappings
         self.init_encoded_table()
+        self.load_mappings_from_db()
         
         # Get date ranges
         last_encoded_date = self.get_last_encoded_date()
@@ -649,6 +847,13 @@ class IncrementalEncoder:
             self.delete_encoded_date_data(last_encoded_date)
             start_date = last_encoded_date
         
+        # Apply test_days limit if specified
+        if self.test_days:
+            start_date_dt = pd.to_datetime(start_date)
+            test_end_date = start_date_dt + timedelta(days=self.test_days - 1)
+            max_raw_date = min(pd.to_datetime(max_raw_date), test_end_date).strftime('%Y-%m-%d')
+            self.logger.info(f"TEST MODE: Limiting to {self.test_days} days, ending at {max_raw_date}")
+        
         self.logger.info(f"Encoding from {start_date} to {max_raw_date}")
         
         # Load historical context up to start date
@@ -666,6 +871,9 @@ class IncrementalEncoder:
             
             current_date += timedelta(days=1)
         
+        # Save mappings to database
+        self.save_mappings_to_db()
+        
         self.logger.info(f"Incremental encoding complete. Total records encoded: {total_encoded}")
         
         # Show summary
@@ -674,17 +882,31 @@ class IncrementalEncoder:
                 cursor = conn.execute(f"SELECT COUNT(*), MIN(date), MAX(date) FROM {self.encoded_table}")
                 count, min_date, max_date = cursor.fetchone()
                 self.logger.info(f"Encoded table now contains {count} records from {min_date} to {max_date}")
+                
+                # Show mapping statistics
+                cursor = conn.execute("SELECT mapping_type, COUNT(*) FROM feature_mappings GROUP BY mapping_type")
+                mapping_stats = cursor.fetchall()
+                if mapping_stats:
+                    self.logger.info("Final mapping counts:")
+                    for mapping_type, count in mapping_stats:
+                        self.logger.info(f"  {mapping_type}: {count} unique values")
 
 def main():
     parser = argparse.ArgumentParser(description='Incremental race data encoding')
     parser.add_argument('--dry-run', 
                        action='store_true',
                        help='Show what would be done without making changes')
+    parser.add_argument('--test-days', 
+                       type=int,
+                       help='Test mode: only process N days from start date (useful for testing)')
     
     args = parser.parse_args()
     
     try:
-        encoder = IncrementalEncoder(dry_run=args.dry_run)
+        encoder = IncrementalEncoder(
+            dry_run=args.dry_run,
+            test_days=args.test_days
+        )
         
         # Ensure db directory exists
         db_dir = os.path.dirname(encoder.db_path)
