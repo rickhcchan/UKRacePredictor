@@ -464,9 +464,9 @@ class RaceDataUpdater:
         last_date = self.get_last_complete_date()
         
         if last_date is None:
-            # No data in database, start from 2016 for 10 years of training data
-            start_date = "2016-01-01"  # 10 years of historical data for training
-            self.logger.info(f"No existing data, starting from {start_date}")
+            # No data in database, start from configured historical start date
+            start_date = self._get_config_value('common', 'historical_start_date', '2016-01-01')
+            self.logger.info(f"No existing data, starting from configured historical start date: {start_date}")
         else:
             # Delete last day's data (might be incomplete)
             self.delete_date_data(last_date)

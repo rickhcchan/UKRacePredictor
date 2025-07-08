@@ -1,0 +1,51 @@
+# User Settings Configuration
+# Copy from default_settings.conf and customize for your environment.
+# This file is ignored by git and contains your personal settings.
+
+[common]
+# Shared database path - used by multiple scripts
+# db_path = data/race_data.db
+
+# Shared data directory (override if needed)
+# data_dir = data
+
+# Shared models directory (override if needed)
+# models_dir = models
+
+# Historical start date for data processing (override if needed)
+# historical_start_date = 2016-01-01
+
+[update_race_data]
+# Path to rpscrape script - customize for your environment
+# rpscrape_path = ../../joenano/rpscrape/scripts/rpscrape.py
+
+# Timeout for rpscrape commands in seconds
+# timeout = 300
+
+# Region to scrape (override if needed)
+# region = gb
+
+[encode_incremental]
+# Output table in database for encoded features (override if needed)
+# encoded_table = encoded_race_data
+
+# Batch size for processing races (override if needed)
+# batch_size = 100
+
+# Whether to process races individually or in daily batches (override if needed)
+# process_mode = daily
+
+[api]
+# Your actual API keys (never commit to git!)
+# openai_api_key = sk-your-actual-openai-key-here
+# google_sheets_credentials = config/your-credentials.json
+
+[logging]
+# Override log level for debugging
+# level = DEBUG
+
+# Override log format if needed
+# format = %(asctime)s - %(levelname)s - %(message)s
+
+# Override log directory if needed
+# log_dir = logs
