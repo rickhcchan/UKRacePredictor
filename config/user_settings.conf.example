@@ -25,16 +25,6 @@
 # Region to scrape (override if needed)
 # region = gb
 
-[encode_incremental]
-# Output table in database for encoded features (override if needed)
-# encoded_table = encoded_race_data
-
-# Batch size for processing races (override if needed)
-# batch_size = 100
-
-# Whether to process races individually or in daily batches (override if needed)
-# process_mode = daily
-
 [api]
 # Your actual API keys (never commit to git!)
 # openai_api_key = sk-your-actual-openai-key-here

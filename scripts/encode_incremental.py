@@ -60,13 +60,10 @@ class IncrementalEncoder:
         
         # Set database path from config
         self.db_path = self._get_config_value('common', 'db_path', 'data/race_data.db')
-        self.encoded_table = self._get_config_value('encode_incremental', 'encoded_table', 'encoded_race_data')
-        self.batch_size = int(self._get_config_value('encode_incremental', 'batch_size', '100'))
-        self.process_mode = self._get_config_value('encode_incremental', 'process_mode', 'daily')
+        self.encoded_table = 'encoded_race_data'
         
         self.logger.info(f"Using database: {self.db_path}")
         self.logger.info(f"Encoded table: {self.encoded_table}")
-        self.logger.info(f"Process mode: {self.process_mode}")
         
         # Initialize historical tracking for features
         self.horse_history = defaultdict(list)
