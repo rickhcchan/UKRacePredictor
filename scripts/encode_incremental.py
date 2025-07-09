@@ -16,11 +16,14 @@ Configuration is loaded from:
 2. config/default_settings.conf (fallback) - default settings, in git
 
 Usage:
-    python encode_incremental.py [--dry-run]
+    python encode_incremental.py [--dry-run] [--force-rebuild] [--test-days N]
     
 Examples:
     # Encode all new data since last encoded date
     python encode_incremental.py
+    
+    # Force rebuild from scratch (after schema changes)
+    python encode_incremental.py --force-rebuild
     
     # Test run without making changes
     python encode_incremental.py --dry-run
@@ -42,18 +45,13 @@ from typing import Optional, Dict, List, Tuple
 script_dir = Path(__file__).parent
 sys.path.append(str(script_dir))
 
-try:
-    from common import setup_logging
-except ImportError:
-    def setup_logging():
-        import logging
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-        return logging.getLogger(__name__)
+from common import setup_logging, convert_to_24h_time
 
 class IncrementalEncoder:
-    def __init__(self, dry_run: bool = False, test_days: Optional[int] = None):
+    def __init__(self, dry_run: bool = False, test_days: Optional[int] = None, force_rebuild: bool = False):
         self.dry_run = dry_run
         self.test_days = test_days
+        self.force_rebuild = force_rebuild
         self.logger = setup_logging()
         
         # Load configuration
@@ -118,26 +116,33 @@ class IncrementalEncoder:
         
         return config
 
-    def init_encoded_table(self):
+    def init_encoded_table(self, force_recreate: bool = False):
         """Initialize the encoded race data table if it doesn't exist."""
         with sqlite3.connect(self.db_path) as conn:
+            # If force_recreate is True, drop and recreate the table to ensure schema matches
+            if force_recreate:
+                self.logger.info(f"Force recreating {self.encoded_table} table with new schema")
+                conn.execute(f"DROP TABLE IF EXISTS {self.encoded_table}")
+                conn.commit()
+            
             # Create encoded features table
             conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.encoded_table} (
                     race_id INTEGER,
                     horse_id INTEGER,
                     date TEXT,
+                    off_time_12h TEXT,
+                    off_time_24h TEXT,
                     
                     -- Basic race features
-                    course TEXT,
                     course_id INTEGER,
-                    race_name TEXT,
                     type_id INTEGER,
-                    class TEXT,
+                    class_num INTEGER,
                     pattern_id INTEGER,
-                    rating_band TEXT,
-                    age_band TEXT,
-                    sex_rest TEXT,
+                    max_rating INTEGER,
+                    min_age INTEGER,
+                    max_age INTEGER,
+                    sex_rest_id INTEGER,
                     dist_f REAL,
                     going_id INTEGER,
                     ran INTEGER,
@@ -147,7 +152,6 @@ class IncrementalEncoder:
                     month_cos REAL,
                     
                     -- Horse features
-                    horse_name TEXT,
                     age INTEGER,
                     sex_id INTEGER,
                     lbs INTEGER,
@@ -248,7 +252,10 @@ class IncrementalEncoder:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_feature_mappings_type ON feature_mappings(mapping_type)")
             
             conn.commit()
-            self.logger.info(f"Encoded table {self.encoded_table} initialized successfully")
+            if force_recreate:
+                self.logger.info(f"Encoded table {self.encoded_table} recreated with new schema")
+            else:
+                self.logger.info(f"Encoded table {self.encoded_table} initialized successfully")
             self.logger.info("Feature mappings table initialized successfully")
 
     def load_mappings_from_db(self):
@@ -408,7 +415,7 @@ class IncrementalEncoder:
             query = """
             SELECT * FROM race_data 
             WHERE date = ? 
-            ORDER BY race_id, pos
+            ORDER BY pos
             """
             df = pd.read_sql_query(query, conn, params=(date_str,))
         
@@ -416,7 +423,14 @@ class IncrementalEncoder:
             self.logger.info(f"No races found for {date_str}")
             return 0
         
-        self.logger.info(f"Found {len(df)} race records for {date_str}")
+        # Convert times to 24H format and sort races chronologically within the day
+        df['off_time_24h'] = df['off'].apply(convert_to_24h_time)
+        df['off_time_12h'] = df['off']  # Keep original 12H time
+        
+        # Sort by 24H time first, then by race_id, then by pos
+        df = df.sort_values(['off_time_24h', 'race_id', 'pos'])
+        
+        self.logger.info(f"Found {len(df)} race records for {date_str}, sorted by 24H time for chronological processing")
         
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would encode {len(df)} records for {date_str}")
@@ -500,22 +514,29 @@ class IncrementalEncoder:
         jockey_records = list(self.jockey_history[jockey_id]) + daily_jockey_history[jockey_id]
         trainer_records = list(self.trainer_history[trainer_id]) + daily_trainer_history[trainer_id]
         
+        # Engineer features from raw fields
+        class_num = self._extract_class_number(row['class'])
+        max_rating = self._extract_max_rating(row['rating_band'])
+        min_age, max_age = self._extract_age_range(row['age_band'])
+        sex_rest_id = self._get_sex_rest_mapping(row['sex_rest'])  # Use special mapping for sex_rest
+        
         # Calculate features
         features = {
             'race_id': row['race_id'],
             'horse_id': horse_id,
             'date': race_date,
+            'off_time_12h': row.get('off_time_12h', row.get('off', '')),
+            'off_time_24h': row.get('off_time_24h', ''),
             
             # Basic race features
-            'course': course,
             'course_id': self._get_or_create_mapping('course', course),
-            'race_name': row['race_name'],
             'type_id': self._get_or_create_mapping('type', race_type),
-            'class': row['class'],
+            'class_num': class_num,
             'pattern_id': self._get_or_create_ordinal_mapping('pattern', row.get('pattern', 'Unknown')),
-            'rating_band': row['rating_band'],
-            'age_band': row['age_band'],
-            'sex_rest': row['sex_rest'],
+            'max_rating': max_rating,
+            'min_age': min_age,
+            'max_age': max_age,
+            'sex_rest_id': sex_rest_id,
             'dist_f': float(str(dist_f).rstrip('f')) if pd.notna(dist_f) else 0.0,
             'going_id': self._get_or_create_ordinal_mapping('going', going),
             'ran': row['ran'],
@@ -525,7 +546,6 @@ class IncrementalEncoder:
             'month_cos': np.cos(2 * np.pi * pd.to_datetime(race_date).month / 12),
             
             # Horse features
-            'horse_name': row['horse'],
             'age': row['age'],
             'sex_id': self._get_or_create_mapping('sex', self._normalize_sex(row['sex'])),
             'lbs': row['lbs'],
@@ -800,6 +820,71 @@ class IncrementalEncoder:
         
         return sex_normalization_map.get(sex_str, 'Unknown')
 
+    def _extract_class_number(self, class_value) -> int:
+        """Extract numeric class value from class string."""
+        if pd.isna(class_value) or class_value == '':
+            return -1
+        
+        # Handle different class formats
+        class_str = str(class_value).strip()
+        
+        # Extract number from class string (e.g., "Class 4" -> 4, "3" -> 3)
+        import re
+        match = re.search(r'(\d+)', class_str)
+        if match:
+            return int(match.group(1))
+        
+        return -1
+
+    def _extract_max_rating(self, rating_band) -> int:
+        """Extract maximum rating from rating band (e.g., '0-100' -> 100)."""
+        if pd.isna(rating_band) or rating_band == '':
+            return -1
+        
+        # Most rating bands are in format "0-100"
+        if '-' in str(rating_band):
+            parts = str(rating_band).split('-')
+            if len(parts) == 2:
+                try:
+                    return int(parts[1])
+                except ValueError:
+                    pass
+        
+        return -1
+
+    def _extract_age_range(self, age_band) -> tuple:
+        """Extract min and max age from age band (e.g., '3-5yo' -> (3, 5), '3yo+' -> (3, 999))."""
+        if pd.isna(age_band) or age_band == '':
+            return -1, -1
+        
+        age_str = str(age_band).strip().lower()
+        
+        # Handle "3yo+" format (means 3 or above)
+        if '+' in age_str:
+            import re
+            match = re.search(r'(\d+)', age_str)
+            if match:
+                min_age = int(match.group(1))
+                return min_age, 999  # Use 999 for unlimited
+        
+        # Handle range format like "3-5yo"
+        if '-' in age_str:
+            import re
+            match = re.search(r'(\d+)-(\d+)', age_str)
+            if match:
+                min_age = int(match.group(1))
+                max_age = int(match.group(2))
+                return min_age, max_age
+        
+        # Handle single age like "3yo"
+        import re
+        match = re.search(r'(\d+)', age_str)
+        if match:
+            age = int(match.group(1))
+            return age, age
+        
+        return -1, -1
+
     def _update_historical_context(self, df: pd.DataFrame):
         """Update historical context with the day's race results."""
         for _, row in df.iterrows():
@@ -826,7 +911,8 @@ class IncrementalEncoder:
         self.logger.info("Starting incremental race data encoding")
         
         # Initialize encoded table and load existing mappings
-        self.init_encoded_table()
+        self.init_encoded_table(force_recreate=self.force_rebuild)
+        
         self.load_mappings_from_db()
         
         # Get date ranges
@@ -837,11 +923,14 @@ class IncrementalEncoder:
             self.logger.error("No raw race data found")
             return
         
-        if last_encoded_date is None:
-            # No encoded data yet, start from configured historical start date
+        if last_encoded_date is None or self.force_rebuild:
+            # No encoded data yet or force rebuild, start from configured historical start date
             historical_start = self._get_config_value('common', 'historical_start_date', '2016-01-01')
             start_date = historical_start
-            self.logger.info(f"No encoded data found, starting from configured historical start date: {start_date}")
+            if self.force_rebuild:
+                self.logger.info(f"Force rebuild requested, starting fresh from configured historical start date: {start_date}")
+            else:
+                self.logger.info(f"No encoded data found, starting from configured historical start date: {start_date}")
         else:
             # Delete last encoded date (might be incomplete) and resume from there
             self.delete_encoded_date_data(last_encoded_date)
@@ -891,6 +980,22 @@ class IncrementalEncoder:
                     for mapping_type, count in mapping_stats:
                         self.logger.info(f"  {mapping_type}: {count} unique values")
 
+    def _get_sex_rest_mapping(self, sex_rest_value) -> int:
+        """Map sex_rest values using related sex IDs since they share the same values."""
+        if pd.isna(sex_rest_value) or sex_rest_value == '':
+            return self._get_or_create_mapping('sex', 'Unknown')
+        
+        sex_rest_str = str(sex_rest_value).strip()
+        
+        # Handle compound values like "F & M" or "C & G"
+        if '&' in sex_rest_str:
+            # For compound values, use the first sex type for mapping consistency
+            first_sex = sex_rest_str.split('&')[0].strip()
+            return self._get_or_create_mapping('sex', first_sex)
+        else:
+            # Single sex value - use the same sex mapping
+            return self._get_or_create_mapping('sex', sex_rest_str)
+
 def main():
     parser = argparse.ArgumentParser(description='Incremental race data encoding')
     parser.add_argument('--dry-run', 
@@ -899,13 +1004,17 @@ def main():
     parser.add_argument('--test-days', 
                        type=int,
                        help='Test mode: only process N days from start date (useful for testing)')
+    parser.add_argument('--force-rebuild', 
+                       action='store_true',
+                       help='Force rebuild: truncate encoded table and start fresh (use after schema changes)')
     
     args = parser.parse_args()
     
     try:
         encoder = IncrementalEncoder(
             dry_run=args.dry_run,
-            test_days=args.test_days
+            test_days=args.test_days,
+            force_rebuild=args.force_rebuild
         )
         
         # Ensure db directory exists

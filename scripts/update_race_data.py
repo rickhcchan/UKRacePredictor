@@ -42,13 +42,7 @@ from typing import Optional, List, Tuple
 script_dir = Path(__file__).parent
 sys.path.append(str(script_dir))
 
-try:
-    from common import setup_logging
-except ImportError:
-    def setup_logging():
-        import logging
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-        return logging.getLogger(__name__)
+from common import setup_logging
 
 class RaceDataUpdater:
     def __init__(self, dry_run: bool = False):
@@ -58,13 +52,16 @@ class RaceDataUpdater:
         # Load configuration
         self.config = self._load_config()
         
-        # Set database path from config
+        # Set paths from config
         self.db_path = self._get_config_value('common', 'db_path', 'data/race_data.db')
+        self.rpscrape_dir = self._get_config_value('common', 'rpscrape_dir')
+        self.timeout = int(self._get_config_value('common', 'timeout', '30'))
+        self.rpscrape_path = Path(self.rpscrape_dir) / 'scripts' / 'rpscrape.py'
         
-        # Find rpscrape script
-        self.rpscrape_path = self._find_rpscrape_path()
         self.logger.info(f"Using database: {self.db_path}")
-        self.logger.info(f"Using rpscrape at: {self.rpscrape_path}")
+        self.logger.info(f"Using rpscrape directory: {self.rpscrape_dir}")
+        self.logger.info(f"Using timeout: {self.timeout}s")
+        self.logger.info(f"Using rpscrape script: {self.rpscrape_path}")
 
     def _get_config_value(self, section: str, key: str, default: str = None) -> str:
         """Get a configuration value with fallback to default."""
@@ -77,46 +74,6 @@ class RaceDataUpdater:
                     return str(project_root / value)
             return value
         return default
-
-    def _find_rpscrape_path(self) -> str:
-        """Find the rpscrape script path using configuration or auto-detection."""
-        # First check configuration file
-        config_path = self._get_config_value('update_race_data', 'rpscrape_path')
-        if config_path and os.path.exists(config_path):
-            return config_path
-        elif config_path:
-            self.logger.warning(f"Configured rpscrape path not found: {config_path}")
-        
-        # Auto-detect using relative paths based on common Git structure
-        # Assuming structure: {git_root}/{username}/{project}
-        current_dir = Path(__file__).parent.parent  # Go up from scripts/ to project root
-        git_root = current_dir.parent.parent  # Go up to git root (assuming rickhcchan/UKRacePredictor)
-        
-        possible_paths = [
-            # Relative paths based on Git structure
-            git_root / "joenano" / "rpscrape" / "scripts" / "rpscrape.py",
-            git_root / "joenano" / "rpscrape" / "rpscrape.py",
-            # Also try current directory relative paths
-            current_dir.parent / "rpscrape" / "scripts" / "rpscrape.py",
-            current_dir.parent / "rpscrape" / "rpscrape.py",
-            # If in PATH
-            "rpscrape.py"
-        ]
-        
-        for path in possible_paths:
-            if isinstance(path, Path):
-                path_str = str(path)
-            else:
-                path_str = path
-            
-            if os.path.exists(path_str):
-                return path_str
-        
-        # If nothing found, show all attempted paths
-        self.logger.error("Could not find rpscrape.py. Tried the following locations:")
-        for path in possible_paths:
-            self.logger.error(f"  - {path}")
-        raise FileNotFoundError("Could not find rpscrape.py. Please add update_race_data.rpscrape_path to user_settings.conf")
 
     def _load_config(self) -> Optional[configparser.ConfigParser]:
         """Load configuration from user_settings.conf or default_settings.conf."""
@@ -278,7 +235,7 @@ class RaceDataUpdater:
                         cwd=rpscrape_dir,
                         capture_output=True, 
                         text=True, 
-                        timeout=300  # 5 minute timeout
+                        timeout=self.timeout
                     )
                     
                     if result.returncode != 0:
