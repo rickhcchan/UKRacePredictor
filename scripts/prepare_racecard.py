@@ -367,10 +367,10 @@ class RacecardPreparer:
                 self.logger.warning(f"Missing horse_id for runner: {runner.get('name', 'Unknown')}")
                 return None
             
-            # Get historical records
-            horse_records = self.horse_history.get(horse_id, [])
-            jockey_records = self.jockey_history.get(jockey_id, [])
-            trainer_records = self.trainer_history.get(trainer_id, [])
+            # Get historical records (filter to exclude current date to prevent data leakage)
+            horse_records = [r for r in self.horse_history.get(horse_id, []) if r['date'] < self.target_date]
+            jockey_records = [r for r in self.jockey_history.get(jockey_id, []) if r['date'] < self.target_date]
+            trainer_records = [r for r in self.trainer_history.get(trainer_id, []) if r['date'] < self.target_date]
             
             # Basic race information
             course = course_name

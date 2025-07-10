@@ -436,27 +436,10 @@ class IncrementalEncoder:
         
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would encode {len(df)} records for {date_str}")
-            # Still simulate the encoding process to update daily history properly
-            daily_horse_history = defaultdict(list)
-            daily_jockey_history = defaultdict(list)
-            daily_trainer_history = defaultdict(list)
-            
+            # Still simulate the encoding process without saving
             for _, row in df.iterrows():
                 # Just simulate the encoding without saving
-                features = self._encode_single_record(row, daily_horse_history, daily_jockey_history, daily_trainer_history)
-                
-                # Update daily history with this race result
-                race_record = {
-                    'date': row['date'],
-                    'win': 1 if (row['pos'] == 1 or row['pos'] == '1') else 0,
-                    'course': row['course'],
-                    'going': row['going'],
-                    'dist_f': row['dist_f'],
-                    'type': row['type']
-                }
-                daily_horse_history[row['horse_id']].append(race_record)
-                daily_jockey_history[row['jockey_id']].append(race_record)
-                daily_trainer_history[row['trainer_id']].append(race_record)
+                features = self._encode_single_record(row)
             
             # Update historical context with this day's results
             self._update_historical_context(df)
@@ -465,27 +448,9 @@ class IncrementalEncoder:
         # Encode features for all races on this date
         encoded_features = []
         
-        # Track within-day race history for proper same-day calculations
-        daily_horse_history = defaultdict(list)
-        daily_jockey_history = defaultdict(list)
-        daily_trainer_history = defaultdict(list)
-        
         for _, row in df.iterrows():
-            features = self._encode_single_record(row, daily_horse_history, daily_jockey_history, daily_trainer_history)
+            features = self._encode_single_record(row)
             encoded_features.append(features)
-            
-            # Update daily history with this race result
-            race_record = {
-                'date': row['date'],
-                'win': 1 if (row['pos'] == 1 or row['pos'] == '1') else 0,
-                'course': row['course'],
-                'going': row['going'],
-                'dist_f': row['dist_f'],
-                'type': row['type']
-            }
-            daily_horse_history[row['horse_id']].append(race_record)
-            daily_jockey_history[row['jockey_id']].append(race_record)
-            daily_trainer_history[row['trainer_id']].append(race_record)
         
         # Save encoded features to database
         if encoded_features:
@@ -500,7 +465,7 @@ class IncrementalEncoder:
         self.logger.info(f"✓ Encoded {len(encoded_features)} records for {date_str}")
         return len(encoded_features)
 
-    def _encode_single_record(self, row, daily_horse_history, daily_jockey_history, daily_trainer_history) -> Dict:
+    def _encode_single_record(self, row) -> Dict:
         """Encode features for a single race record."""
         horse_id = row['horse_id']
         jockey_id = row['jockey_id']
@@ -511,10 +476,10 @@ class IncrementalEncoder:
         race_type = row['type']
         race_date = row['date']
         
-        # Get historical records (combine historical + daily)
-        horse_records = list(self.horse_history[horse_id]) + daily_horse_history[horse_id]
-        jockey_records = list(self.jockey_history[jockey_id]) + daily_jockey_history[jockey_id]
-        trainer_records = list(self.trainer_history[trainer_id]) + daily_trainer_history[trainer_id]
+        # Get historical records (filter to exclude current race date to prevent data leakage)
+        horse_records = [r for r in self.horse_history[horse_id] if r['date'] < race_date]
+        jockey_records = [r for r in self.jockey_history[jockey_id] if r['date'] < race_date]
+        trainer_records = [r for r in self.trainer_history[trainer_id] if r['date'] < race_date]
         
         # Engineer features from raw fields
         class_num = self._extract_class_number(row['class'])
