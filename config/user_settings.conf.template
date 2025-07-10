@@ -1,0 +1,33 @@
+# User Settings Configuration Template
+# Copy this file to user_settings.conf and customize for your personal environment.
+# This file should NOT be committed to git as it contains personal paths and settings.
+
+[common]
+# REQUIRED: Update this path to your actual rpscrape installation
+# Default is: ../../joenano/rpscrape
+# Example for Windows: C:/path/to/your/rpscrape
+# Example for Linux/Mac: /home/username/rpscrape
+# rpscrape_dir = /path/to/your/rpscrape
+
+# Optional: Override default timeout for subprocess calls (default: 30 seconds)
+# timeout = 60
+
+# Optional: Override default paths if needed
+# db_path = data/race_data.db
+# data_dir = data
+# models_dir = models
+# historical_start_date = 2016-01-01
+
+[update_race_data]
+# Optional: Override default region (default: gb)
+# region = gb
+
+[logging]
+# Optional: Customize logging for your preference (default: INFO)
+# level = DEBUG
+# format = %(asctime)s - %(name)s - %(levelname)s - %(message)s
+
+# Optional: Add API keys if needed in future
+# [api]
+# openai_api_key = your_key_here
+# google_sheets_credentials = path/to/credentials.json
