@@ -15,20 +15,11 @@ Configuration is loaded from:
 2. config/default_settings.conf (fallback) - default settings, in git
 
 Usage:
-    python prepare_racecard.py [--date YYYY-MM-DD] [--dry-run] [--auto-update]
+    python prepare_racecard.py
     
 Examples:
     # Prepare today's racecard
     python prepare_racecard.py
-    
-    # Prepare racecard for specific date
-    python prepare_racecard.py --date 2025-07-08
-    
-    # Test run without making changes
-    python prepare_racecard.py --dry-run
-    
-    # Auto-update missing historical data
-    python prepare_racecard.py --auto-update
 """
 
 import os
@@ -53,11 +44,13 @@ sys.path.append(str(script_dir))
 from common import setup_logging, convert_to_24h_time
 
 class RacecardPreparer:
-    def __init__(self, date: str = None, dry_run: bool = False, auto_update: bool = False):
-        self.target_date = date or datetime.now().strftime('%Y-%m-%d')
+    def __init__(self, dry_run: bool = False):
+        self.target_date = datetime.now().strftime('%Y-%m-%d')
         self.dry_run = dry_run
-        self.auto_update = auto_update
         self.logger = setup_logging()
+        
+        if self.dry_run:
+            self.logger.info("🔍 DRY RUN MODE: No files will be modified")
         
         # Load configuration
         self.config = self._load_config()
@@ -69,7 +62,7 @@ class RacecardPreparer:
         self.prediction_raw_dir = Path(self._get_config_value('common', 'data_dir', 'data')) / 'prediction' / 'raw'
         self.prediction_processed_dir = Path(self._get_config_value('common', 'data_dir', 'data')) / 'prediction' / 'processed'
         
-        self.logger.info(f"Preparing racecard for date: {self.target_date}")
+        self.logger.info(f"Preparing racecard for today: {self.target_date}")
         self.logger.info(f"Using database: {self.db_path}")
         self.logger.info(f"Using rpscrape at: {self.rpscrape_dir}")
         self.logger.info(f"Using timeout: {self.timeout}s")
@@ -144,12 +137,8 @@ class RacecardPreparer:
         
         if max_date < yesterday:
             self.logger.warning(f"Historical data only available up to {max_date}, need data up to {yesterday}")
-            if self.auto_update:
-                self.logger.info("Auto-update enabled, attempting to update historical data...")
-                return self._auto_update_historical_data(yesterday)
-            else:
-                self.logger.warning("Consider running: python update_race_data.py")
-                return False
+            self.logger.warning("Consider running: python update_race_data.py")
+            return False
         
         self.logger.info(f"Historical data available up to {max_date} ✓")
         return True
@@ -158,10 +147,6 @@ class RacecardPreparer:
         """Automatically update historical data if auto_update is enabled."""
         try:
             self.logger.info("Running update_race_data.py to get latest historical data...")
-            if self.dry_run:
-                self.logger.info("[DRY RUN] Would run: python update_race_data.py")
-                return True
-            
             result = subprocess.run([
                 sys.executable, "update_race_data.py", "--end-date", target_date
             ], cwd=script_dir, capture_output=True, text=True, timeout=self.timeout)
@@ -189,7 +174,7 @@ class RacecardPreparer:
             return True
         
         if self.dry_run:
-            self.logger.info(f"[DRY RUN] Would download racecard for {self.target_date}")
+            self.logger.info(f"[DRY RUN] Would download racecard for {self.target_date} to: {racecard_file}")
             return True
         
         try:
@@ -469,24 +454,22 @@ class RacecardPreparer:
         
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would save {len(df)} prepared records to: {output_file}")
-            return
-        
-        df.to_csv(output_file, index=False)
-        self.logger.info(f"Saved {len(df)} prepared records to: {output_file}")
+        else:
+            df.to_csv(output_file, index=False)
+            self.logger.info(f"Saved {len(df)} prepared records to: {output_file}")
 
     def cleanup_raw_racecard(self):
         """Clean up raw racecard file after processing."""
         raw_file = self.prediction_raw_dir / f"{self.target_date}.json"
         
-        if self.dry_run:
-            self.logger.info(f"[DRY RUN] Would delete raw racecard file: {raw_file}")
-            return
-        
         if raw_file.exists():
-            raw_file.unlink()
-            self.logger.info(f"Cleaned up raw racecard file: {raw_file}")
+            if self.dry_run:
+                self.logger.info(f"[DRY RUN] Would clean up raw racecard file: {raw_file}")
+            else:
+                raw_file.unlink()
+                self.logger.info(f"Cleaned up raw racecard file: {raw_file}")
 
-    def run_preparation(self):
+    def prepare_racecard(self):
         """Main method to run racecard preparation."""
         self.logger.info(f"Starting racecard preparation for {self.target_date}")
         
@@ -811,27 +794,16 @@ class RacecardPreparer:
         return -1, -1
 
 def main():
-    parser = argparse.ArgumentParser(description='Prepare racecard with feature engineering')
-    parser.add_argument('--date', 
-                       type=str,
-                       help='Target date for racecard (YYYY-MM-DD), defaults to today')
-    parser.add_argument('--dry-run', 
-                       action='store_true',
-                       help='Show what would be done without making changes')
-    parser.add_argument('--auto-update', 
-                       action='store_true',
-                       help='Automatically update historical data if missing')
+    parser = argparse.ArgumentParser(description='Prepare today\'s racecard with feature engineering')
+    parser.add_argument('--dry-run', action='store_true', 
+                        help='Show what would be done without making actual changes')
     
     args = parser.parse_args()
     
     try:
-        preparer = RacecardPreparer(
-            date=args.date,
-            dry_run=args.dry_run,
-            auto_update=args.auto_update
-        )
+        preparer = RacecardPreparer(dry_run=args.dry_run)
         
-        success = preparer.run_preparation()
+        success = preparer.prepare_racecard()
         
         if success:
             print(f"✓ Racecard preparation completed successfully for {preparer.target_date}")

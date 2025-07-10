@@ -10,15 +10,20 @@ This script handles the complete race prediction workflow:
 
 The script requires a prepared racecard from prepare_racecard.py.
 
+Betting Logic:
+- Displays races where at least one horse has calibrated probability > 20%
+- Recommends bets only when exactly one horse > 20% AND second-highest < 80% of top
+- Shows all horses with calibrated probability > 20% in qualifying races
+
 Configuration is loaded from:
 1. config/user_settings.conf (if exists) - personal settings, not in git
 2. config/default_settings.conf (fallback) - default settings, in git
 
 Usage:
-    python predict_races.py [--date YYYY-MM-DD] [--dry-run] [--model-version v1]
+    python predict_races.py [--date YYYY-MM-DD] [--dry-run] [--model-name MODEL_NAME]
     
 Examples:
-    # Predict today's races
+    # Predict today's races using default model
     python predict_races.py
     
     # Predict races for specific date
@@ -27,8 +32,8 @@ Examples:
     # Test run without saving predictions
     python predict_races.py --dry-run
     
-    # Use specific model version
-    python predict_races.py --model-version v2
+    # Use specific model
+    python predict_races.py --model-name v2
 """
 
 import os
@@ -48,15 +53,20 @@ script_dir = Path(__file__).parent
 sys.path.append(str(script_dir))
 
 from common import setup_logging, convert_to_24h_time
+from model_config import load_model_config
 
 class RacePredictor:
-    def __init__(self, date: str = None, dry_run: bool = False, model_version: str = "v1"):
+    def __init__(self, date: str = None, dry_run: bool = False, model_name: str = "default"):
         self.target_date = date or datetime.now().strftime('%Y-%m-%d')
         self.dry_run = dry_run
-        self.model_version = model_version
+        self.model_name = model_name
         self.logger = setup_logging()
         
-        # Load configuration
+        # Load model configuration from JSON
+        self.model_config = load_model_config(self.model_name)
+        self.logger.info(f"Loaded model config: {self.model_config.description}")
+        
+        # Load system configuration
         self.config = self._load_config()
         
         # Set paths from config
@@ -65,7 +75,7 @@ class RacePredictor:
         self.models_dir = Path(self._get_config_value('common', 'models_dir', 'models'))
         
         self.logger.info(f"Predicting races for date: {self.target_date}")
-        self.logger.info(f"Using model version: {self.model_version}")
+        self.logger.info(f"Using model name: {self.model_name}")
         self.logger.info(f"Models directory: {self.models_dir}")
         
         # Model components
@@ -115,15 +125,18 @@ class RacePredictor:
     def load_models(self) -> bool:
         """Load the trained model, calibrator, and feature list."""
         try:
-            model_dir = self.models_dir / self.model_version
+            model_dir = self.models_dir / self.model_name
             
             if not model_dir.exists():
                 # Fallback to root models directory for backward compatibility
                 model_dir = self.models_dir
-                self.logger.warning(f"Model version directory not found, using root models directory: {model_dir}")
+                self.logger.warning(f"Model directory not found, using root models directory: {model_dir}")
             
             # Load base model
-            model_file = model_dir / f"lightgbm_model_{self.model_version}.pkl"
+            model_file = model_dir / "lightgbm_model.pkl"
+            if not model_file.exists():
+                # Try old naming convention for backward compatibility
+                model_file = model_dir / f"lightgbm_model_{self.model_name}.pkl"
             if not model_file.exists():
                 # Try alternative naming
                 model_file = model_dir / "lightgbm_model_clean.pkl"
@@ -136,10 +149,10 @@ class RacePredictor:
             self.logger.info(f"✓ Loaded base model from: {model_file}")
             
             # Load calibrator
-            calibrator_file = model_dir / f"probability_calibrator_{self.model_version}.pkl"
+            calibrator_file = model_dir / "probability_calibrator.pkl"
             if not calibrator_file.exists():
-                # Try alternative naming
-                calibrator_file = model_dir / "probability_calibrator.pkl"
+                # Try old naming convention for backward compatibility
+                calibrator_file = model_dir / f"probability_calibrator_{self.model_name}.pkl"
             
             if not calibrator_file.exists():
                 self.logger.error(f"Calibrator file not found: {calibrator_file}")
@@ -148,20 +161,24 @@ class RacePredictor:
             self.calibrator = joblib.load(calibrator_file)
             self.logger.info(f"✓ Loaded calibrator from: {calibrator_file}")
             
-            # Load feature list
-            feature_file = model_dir / f"feature_list_{self.model_version}.txt"
-            if not feature_file.exists():
+            # Load feature list - prefer actual model feature list over config
+            feature_list_file = model_dir / "feature_list.txt"
+            if not feature_list_file.exists():
+                # Try old naming convention for backward compatibility
+                feature_list_file = model_dir / f"feature_list_{self.model_name}.txt"
+            if not feature_list_file.exists():
                 # Try alternative naming
-                feature_file = model_dir / "feature_list_clean.txt"
+                feature_list_file = model_dir / "feature_list_clean.txt"
             
-            if not feature_file.exists():
-                self.logger.error(f"Feature list file not found: {feature_file}")
-                return False
-            
-            with open(feature_file, 'r') as f:
-                self.feature_list = [line.strip() for line in f]
-            
-            self.logger.info(f"✓ Loaded feature list with {len(self.feature_list)} features from: {feature_file}")
+            if feature_list_file.exists():
+                with open(feature_list_file, 'r') as f:
+                    self.feature_list = [line.strip() for line in f.readlines() if line.strip()]
+                self.logger.info(f"✓ Loaded feature list from file with {len(self.feature_list)} features")
+            else:
+                # Fallback to config feature list
+                self.feature_list = self.model_config.all_features
+                self.logger.info(f"✓ Using feature list from config with {len(self.feature_list)} features")
+                self.logger.warning("Feature list file not found, using config - there may be mismatches")
             
             return True
             
@@ -235,97 +252,62 @@ class RacePredictor:
         return df
 
     def format_and_display_results(self, df: pd.DataFrame):
-        """Format and display prediction results using betting criteria logic."""
+        """Format and display prediction results - only show races with betting recommendations."""
         self.logger.info("Formatting prediction results...")
         
-        # Betting criteria from original predict.py
-        MIN_CALIB_THRESHOLD = 0.20  # 20% calibrated probability minimum (X)
-        MIN_HORSES_PER_RACE = 3     # Show at least 3 horses when race qualifies
+        # New betting criteria
+        MIN_CALIB_THRESHOLD = 0.20  # 20% calibrated probability minimum
+        SECOND_PLACE_RATIO_THRESHOLD = 0.80  # Second place must be less than 80% of top
         
-        # Calculate dynamic normalized threshold (Y) based on number of runners
-        def calculate_norm_threshold(num_runners):
-            # Y = 1.5 × (100/num_runners) - 50% above random chance
-            factor = 1.5
-            threshold = factor * (100 / num_runners) / 100  # Convert to decimal
-            return threshold
+        bet_races = []
+        bet_horses = []
         
-        qualifying_races = []
-        
-        # Process each race to find qualifying ones
+        # Process each race to find betting recommendations
         for race_id, race_group in df.groupby('race_id'):
-            # Sort by normalized probability (highest first)
-            race_sorted = race_group.sort_values('win_probability_normalized', ascending=False)
+            # Sort by calibrated probability (highest first)
+            race_sorted = race_group.sort_values('win_probability', ascending=False)
             
-            # Calculate dynamic normalized threshold for this race
-            num_runners = len(race_group)
-            min_norm_threshold = calculate_norm_threshold(num_runners)
+            # Find horses with calibrated probability > 20%
+            qualifying_horses = race_sorted[race_sorted['win_probability'] >= MIN_CALIB_THRESHOLD]
             
-            # Check if race has any qualifying horses
-            # Horse qualifies if it meets: Calibrated >20% OR Normalized >dynamic%
-            qualifying_horses = race_sorted[
-                (race_sorted['win_probability'] >= MIN_CALIB_THRESHOLD) |
-                (race_sorted['win_probability_normalized'] >= (min_norm_threshold * 100))
-            ]
-            
-            race_qualifies = len(qualifying_horses) > 0
-            
-            if race_qualifies:
-                # Display Logic: Show at least 3 horses (qualifying + reference for context)
-                horses_to_show = race_sorted.head(MIN_HORSES_PER_RACE)
+            # Check if race qualifies for betting recommendation
+            # Exactly one horse > 20% AND second highest < 80% of top
+            if len(qualifying_horses) == 1:
+                top_horse_prob = race_sorted.iloc[0]['win_probability']
+                second_horse_prob = race_sorted.iloc[1]['win_probability'] if len(race_sorted) > 1 else 0
                 
-                # Add any additional qualifying horses beyond the top 3
-                additional_qualifying = qualifying_horses[~qualifying_horses.index.isin(horses_to_show.index)]
-                if len(additional_qualifying) > 0:
-                    horses_to_show = pd.concat([horses_to_show, additional_qualifying])
-                
-                # Handle ties with the last shown horse
-                if len(race_sorted) > len(horses_to_show):
-                    last_horse_norm_prob = horses_to_show.iloc[-1]['win_probability_normalized']
-                    
-                    # Find all remaining horses with same probability as last horse
-                    remaining_horses = race_sorted[~race_sorted.index.isin(horses_to_show.index)]
-                    same_prob_horses = remaining_horses[
-                        remaining_horses['win_probability_normalized'] == last_horse_norm_prob
-                    ]
-                    
-                    # Include horses with same probability as last horse
-                    if len(same_prob_horses) > 0:
-                        horses_to_show = pd.concat([horses_to_show, same_prob_horses])
-                
-                qualifying_races.append(horses_to_show)
-        
-        # Combine qualifying races for display
-        if qualifying_races:
-            significant_horses = pd.concat(qualifying_races, ignore_index=True)
-        else:
-            significant_horses = pd.DataFrame()
+                if second_horse_prob < (top_horse_prob * SECOND_PLACE_RATIO_THRESHOLD):
+                    bet_races.append(race_id)
+                    bet_horses.append(qualifying_horses.iloc[0])
         
         print("\n🏇 UK HORSE RACING PREDICTIONS")
         print("=" * 80)
         
-        if len(significant_horses) == 0:
-            print(f"❌ No races found with top horse meeting EITHER criteria:")
-            print(f"   • Calibrated probability >{MIN_CALIB_THRESHOLD:.0%} OR")
-            print(f"   • Normalized probability >dynamic threshold (1.5 × random chance)")
-            print("💡 No qualifying races to display.")
+        if len(bet_horses) == 0:
+            print(f"❌ No races found with betting recommendations")
+            print(f"   Criteria: Exactly 1 horse >20% calibrated AND 2nd place <80% of top")
+            print("💡 No bets recommended for today.")
             return
         
-        # Sort by time (if available), then course, then normalized probability
-        if 'time' in significant_horses.columns:
-            try:
-                significant_horses['time_24h'] = significant_horses['time'].apply(convert_to_24h_time)
-                significant_horses = significant_horses.sort_values(['time_24h', 'course', 'win_probability_normalized'], ascending=[True, True, False])
-            except:
-                significant_horses = significant_horses.sort_values(['course', 'win_probability_normalized'], ascending=[True, False])
-        else:
-            significant_horses = significant_horses.sort_values(['course', 'win_probability_normalized'], ascending=[True, False])
+        # Convert to DataFrame for sorting
+        bet_horses_df = pd.DataFrame(bet_horses).reset_index(drop=True)
         
-        print(f"🎯 QUALIFYING RACES (At least 1 horse: Calibrated >{MIN_CALIB_THRESHOLD:.0%} OR normalized >dynamic threshold):")
-        print("💡 BET LEGEND: ✅ BET = Qualifies (Calibrated >20% OR normalized >dynamic%), 📋 REF = Reference only")
-        print("=" * 90)
+        # Sort by time (if available), then course, then calibrated probability
+        if 'time' in bet_horses_df.columns:
+            try:
+                bet_horses_df['time_24h'] = bet_horses_df['time'].apply(convert_to_24h_time)
+                bet_horses_df = bet_horses_df.sort_values(['time_24h', 'course', 'win_probability'], ascending=[True, True, False])
+            except:
+                bet_horses_df = bet_horses_df.sort_values(['course', 'win_probability'], ascending=[True, False])
+        else:
+            bet_horses_df = bet_horses_df.sort_values(['course', 'win_probability'], ascending=[True, False])
+        
+        print(f"🎯 BETTING RECOMMENDATIONS:")
+        print("💡 Only showing races with exactly 1 horse >20% AND 2nd place <80% of top")
+        print("=" * 80)
         
         current_race = None
-        for _, horse in significant_horses.iterrows():
+        for _, horse in bet_horses_df.iterrows():
             race_key = f"{horse.get('course', 'Unknown')} {horse.get('time', 'Unknown')}"
             
             if race_key != current_race:
@@ -335,52 +317,33 @@ class RacePredictor:
                 # Count total horses in this race
                 total_horses_in_race = len(df[df['race_id'] == horse['race_id']])
                 
-                # Calculate and display the dynamic threshold for this race
-                dynamic_threshold = calculate_norm_threshold(total_horses_in_race) * 100  # Convert to percentage
-                
                 print(f"\n📍 {horse.get('course', 'Unknown')} - {horse.get('time', 'Unknown')} ({total_horses_in_race} horses total)")
-                print(f"   Qualifies: Calibrated >{MIN_CALIB_THRESHOLD:.0%} OR normalized >{dynamic_threshold:.1f}% (1.5 × {100/total_horses_in_race:.1f}%)")
-                print("-" * 80)
-                print(f"{'Horse':25} | {'Base%':>6} | {'Calib%':>7} | {'Norm%':>6} | {'BET':>6}")
-                print("-" * 80)
+                print("-" * 60)
+                print(f"{'Horse':25} | {'Calib%':>7}")
+                print("-" * 60)
                 current_race = race_key
             
-            # Format probability display with all three percentages
-            base_prob = horse['base_probability'] * 100
+            # Format probability display with calibrated percentage only
             calib_prob = horse['win_probability'] * 100
-            norm_prob = horse['win_probability_normalized']
             
-            # Determine if this is a bet (horse qualifies: above X OR above Y threshold)
-            dynamic_threshold = calculate_norm_threshold(len(df[df['race_id'] == horse['race_id']])) * 100
-            meets_calib_threshold = calib_prob >= (MIN_CALIB_THRESHOLD * 100)
-            meets_norm_threshold = norm_prob >= dynamic_threshold
-            is_bet = meets_calib_threshold or meets_norm_threshold
-            bet_indicator = "✅ BET" if is_bet else "📋 REF"
-            
-            print(f"{horse.get('horse_name', 'Unknown'):25} | {base_prob:5.1f}% | {calib_prob:6.1f}% | {norm_prob:5.1f}% | {bet_indicator:>6}")
+            print(f"{horse.get('horse_name', 'Unknown'):25} | {calib_prob:6.1f}%")
         
         # Calculate summary statistics
-        total_predictions = len(significant_horses)
-        races_with_predictions = significant_horses['race_id'].nunique() if len(significant_horses) > 0 else 0
         total_races = df['race_id'].nunique()
+        bet_race_count = len(bet_races)
         
         print(f"\n📊 SUMMARY STATISTICS:")
         print(f"Total races analyzed: {total_races}")
-        print(f"Races with predictions: {races_with_predictions}")
-        print(f"Total predictions: {total_predictions}")
-        print(f"Coverage: {races_with_predictions/total_races*100:.1f}% of races")
-        print(f"Min calibrated threshold: {MIN_CALIB_THRESHOLD:.0%}")
-        print(f"Dynamic normalized threshold: varies by race (1.5x random chance)")
-        print(f"Min horses per qualifying race: {MIN_HORSES_PER_RACE}")
-        if total_predictions > 0:
-            print(f"Average calibrated prob: {significant_horses['win_probability'].mean()*100:.1f}%")
-            print(f"Average normalized prob: {significant_horses['win_probability_normalized'].mean():.1f}%")
-            print(f"Max calibrated prob: {significant_horses['win_probability'].max()*100:.1f}%")
-            print(f"Max normalized prob: {significant_horses['win_probability_normalized'].max():.1f}%")
+        print(f"Races with bet recommendations: {bet_race_count}")
+        print(f"Bet coverage: {bet_race_count/total_races*100:.1f}% of races")
+        print(f"Betting criteria: Exactly 1 horse >{MIN_CALIB_THRESHOLD:.0%} AND 2nd place <{SECOND_PLACE_RATIO_THRESHOLD:.0%} of top")
+        if len(bet_horses_df) > 0:
+            print(f"Average recommended horse probability: {bet_horses_df['win_probability'].mean()*100:.1f}%")
+            print(f"Highest recommended probability: {bet_horses_df['win_probability'].max()*100:.1f}%")
 
     def save_predictions(self, df: pd.DataFrame):
         """Save predictions to file."""
-        output_file = self.prediction_processed_dir / f"predictions_{self.target_date}_{self.model_version}.csv"
+        output_file = self.prediction_processed_dir / f"predictions_{self.target_date}_{self.model_name}.csv"
         
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would save {len(df)} predictions to: {output_file}")
@@ -438,10 +401,10 @@ def main():
     parser.add_argument('--dry-run', 
                        action='store_true',
                        help='Show predictions without saving to file')
-    parser.add_argument('--model-version', 
+    parser.add_argument('--model-name', '-m',
                        type=str,
-                       default='v1',
-                       help='Model version to use (default: v1)')
+                       default='default',
+                       help='Model name to use (default: default)')
     
     args = parser.parse_args()
     
@@ -449,7 +412,7 @@ def main():
         predictor = RacePredictor(
             date=args.date,
             dry_run=args.dry_run,
-            model_version=args.model_version
+            model_name=args.model_name
         )
         
         success = predictor.run_prediction()
