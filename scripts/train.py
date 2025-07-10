@@ -14,14 +14,14 @@ Configuration is loaded from:
 2. config/default_settings.conf (fallback) - default settings, in git
 
 Usage:
-    python train.py [--model-version VERSION] [--experiment-name NAME] [--dry-run]
+    python train.py [--model-name MODEL_NAME] [--dry-run]
     
 Examples:
-    # Train with default version
+    # Train with default model
     python train.py
     
-    # Train with specific version
-    python train.py --model-version v2 --experiment-name "leak_free_model"
+    # Train with specific model
+    python train.py --model-name v2
     
     # Test run without saving
     python train.py --dry-run
@@ -48,15 +48,22 @@ script_dir = Path(__file__).parent
 sys.path.append(str(script_dir))
 
 from common import setup_logging
+from model_config import load_model_config
 
 class ModelTrainer:
-    def __init__(self, model_version: str = None, experiment_name: str = None, dry_run: bool = False):
-        self.model_version = model_version or "v1"
-        self.experiment_name = experiment_name
+    def __init__(self, model_name: str = None, dry_run: bool = False):
+        self.model_name = model_name or "default"
         self.dry_run = dry_run
         self.logger = setup_logging()
         
-        # Load configuration
+        if self.dry_run:
+            self.logger.info("🔍 DRY RUN MODE: No model artifacts will be saved")
+        
+        # Load model configuration from JSON
+        self.model_config = load_model_config(self.model_name)
+        self.logger.info(f"Loaded model config: {self.model_config.description}")
+        
+        # Load system configuration
         self.config = self._load_config()
         
         # Set paths from config
@@ -65,12 +72,14 @@ class ModelTrainer:
         
         self.logger.info(f"Using database: {self.db_path}")
         self.logger.info(f"Models directory: {self.models_dir}")
-        self.logger.info(f"Model version: {self.model_version}")
-        if self.experiment_name:
-            self.logger.info(f"Experiment: {self.experiment_name}")
+        self.logger.info(f"Model name: {self.model_name}")
         
-        # Define feature categories
-        self._define_features()
+        # Get features from model config
+        self.categorical_features = self.model_config.categorical_features
+        self.ordinal_features = self.model_config.ordinal_features  
+        self.continuous_features = self.model_config.continuous_features
+        self.excluded_features = self.model_config.excluded_features
+        self.all_features = self.model_config.all_features
 
     def _get_config_value(self, section: str, key: str, default: str = None) -> str:
         """Get a configuration value with fallback to default."""
@@ -111,57 +120,6 @@ class ModelTrainer:
         
         return config
 
-    def _define_features(self):
-        """Define feature categories for training."""
-        # Identifier features (excluded from training)
-        self.identifier_features = [
-            'race_id', 'horse_id', 'jockey_id', 'trainer_id', 'owner_id', 
-            'horse_name', 'course', 'race_name', 'date', 'created_at'
-        ]
-
-        # Categorical features (nominal categories)
-        self.categorical_features = [
-            'course_id', 'type_id', 'sex_id', 'sire_id', 'dam_id', 'damsire_id', 'hg',
-            'sex_rest'  # Keep sex_rest as it's useful for modeling
-        ]
-
-        # Ordinal features (meaningful order/continuous)
-        self.ordinal_features = [
-            'pattern_id', 'going_id', 'age', 'lbs', 'dist_f', 'ran', 'draw',
-            # Engineered features from categorical transformations
-            'rating_upper', 'age_min', 'age_max', 'class_number',
-            # Horse historical features
-            'horse_total_runs', 'horse_total_wins', 'horse_win_pct',
-            'horse_course_runs', 'horse_course_wins', 'horse_course_win_pct',
-            'horse_distance_runs', 'horse_distance_wins', 'horse_distance_win_pct',
-            'horse_going_runs', 'horse_going_wins', 'horse_going_win_pct',
-            'horse_days_since_last_run',  # ✅ Our new feature!
-            # Jockey features
-            'jockey_total_runs', 'jockey_total_wins', 'jockey_win_pct',
-            'jockey_course_runs', 'jockey_course_wins', 'jockey_course_win_pct',
-            'jockey_distance_runs', 'jockey_distance_wins', 'jockey_distance_win_pct',
-            'jockey_going_runs', 'jockey_going_wins', 'jockey_going_win_pct',
-            'jockey_14d_runs', 'jockey_14d_wins', 'jockey_14d_win_pct',
-            'jockey_14d_type_runs', 'jockey_14d_type_wins', 'jockey_14d_type_win_pct',
-            # Trainer features
-            'trainer_total_runs', 'trainer_total_wins', 'trainer_win_pct',
-            'trainer_course_runs', 'trainer_course_wins', 'trainer_course_win_pct',
-            'trainer_distance_runs', 'trainer_distance_wins', 'trainer_distance_win_pct',
-            'trainer_going_runs', 'trainer_going_wins', 'trainer_going_win_pct',
-            'trainer_14d_runs', 'trainer_14d_wins', 'trainer_14d_win_pct',
-            'trainer_14d_type_runs', 'trainer_14d_type_wins', 'trainer_14d_type_win_pct',
-            # Ratings (potentially leaky - will be filtered out later)
-            'or_rating', 'rpr', 'ts'
-        ]
-
-        # Continuous features
-        self.continuous_features = [
-            'month_sin', 'month_cos'
-        ]
-
-        # All training features
-        self.all_features = self.categorical_features + self.ordinal_features + self.continuous_features
-
     def load_data(self) -> pd.DataFrame:
         """Load encoded training data from database."""
         self.logger.info("Loading encoded training data from database")
@@ -194,45 +152,52 @@ class ModelTrainer:
         # Apply feature engineering transformations
         df = self._engineer_features(df.copy())
         
-        # Check which features are available
-        available_features = [f for f in self.all_features if f in df.columns]
-        missing_features = [f for f in self.all_features if f not in df.columns]
+        # Get all available features from data
+        all_available_features = [col for col in df.columns if col not in [
+            'race_id', 'horse_id', 'jockey_id', 'trainer_id', 'owner_id', 
+            'horse_name', 'course', 'race_name', 'date', 'created_at', 'win'
+        ]]
         
-        self.logger.info(f"Using {len(available_features)} features for training")
+        # Filter features based on model config
+        filtered_features, available_categorical, missing_features = self.model_config.filter_available_features(
+            all_available_features
+        )
+        
+        self.logger.info(f"Total available features: {len(all_available_features)}")
+        self.logger.info(f"Using {len(filtered_features)} features for training")
+        
         if missing_features:
-            self.logger.warning(f"Missing features: {missing_features}")
-        
-        # Remove potentially leaky features (ratings that might be post-race)
-        potentially_leaky = ['or_rating', 'rpr', 'ts']
-        clean_features = [f for f in available_features if f not in potentially_leaky]
-        
-        if set(potentially_leaky) & set(available_features):
-            removed = set(potentially_leaky) & set(available_features)
-            self.logger.info(f"Removed potentially leaky features: {list(removed)}")
+            self.logger.warning(f"Missing configured features: {missing_features}")
         
         # Update categorical features list to only include available ones
-        self.available_categorical_features = [f for f in self.categorical_features if f in clean_features]
+        self.available_categorical_features = available_categorical
         
         # Prepare target variable
         if 'win' not in df.columns:
             raise ValueError("Target variable 'win' not found in data")
         
-        X = df[clean_features]
+        X = df[filtered_features]
         y = df['win']
         
         target_distribution = y.value_counts().to_dict()
         self.logger.info(f"Target distribution: {target_distribution}")
         
-        return X, y, clean_features
+        return X, y, filtered_features
 
     def split_data(self, df: pd.DataFrame, X: pd.DataFrame, y: pd.Series) -> tuple:
         """Split data by race to prevent leakage."""
         self.logger.info("Splitting data by race to prevent leakage")
         
+        # Get validation parameters from config
+        val_params = self.model_config.validation_params
+        test_size = val_params.get('test_size', 0.2)
+        calibration_size = val_params.get('calibration_size', 0.2)
+        random_state = val_params.get('random_state', 42)
+        
         # Race-based splitting
         unique_races = df['race_id'].unique()
         train_races, test_races = train_test_split(
-            unique_races, test_size=0.2, random_state=42
+            unique_races, test_size=test_size, random_state=random_state
         )
         
         train_mask = df['race_id'].isin(train_races)
@@ -248,7 +213,7 @@ class ModelTrainer:
         
         # Further split training data for calibration
         X_train_fit, X_train_cal, y_train_fit, y_train_cal = train_test_split(
-            X_train, y_train, test_size=0.2, random_state=42, stratify=y_train
+            X_train, y_train, test_size=calibration_size, random_state=random_state, stratify=y_train
         )
         
         self.logger.info(f"Model training: {len(X_train_fit):,} samples")
@@ -274,24 +239,14 @@ class ModelTrainer:
             categorical_feature=self.available_categorical_features
         )
         
-        # Model parameters - conservative to prevent overfitting
-        params = {
-            'objective': 'binary',
-            'metric': 'binary_logloss',
-            'boosting_type': 'gbdt',
-            'num_leaves': 31,
-            'learning_rate': 0.05,
-            'feature_fraction': 0.7,
-            'bagging_fraction': 0.7,
-            'bagging_freq': 5,
-            'min_data_in_leaf': 50,
-            'lambda_l1': 0.2,
-            'lambda_l2': 0.2,
-            'verbose': -1,
-            'random_state': 42,
-            'is_unbalance': True
-        }
+        # Get model parameters from config
+        params = self.model_config.training_params.copy()
         
+        # Extract training-specific parameters
+        num_boost_round = params.pop('num_boost_round', 1000)
+        early_stopping_rounds = params.pop('early_stopping_rounds', 100)
+        
+        self.logger.info(f"Training parameters: {params}")
         self.logger.info(f"Categorical features: {self.available_categorical_features}")
         
         # Train the model
@@ -300,8 +255,8 @@ class ModelTrainer:
             train_data,
             valid_sets=[train_data, valid_data],
             valid_names=['train', 'cal'],
-            num_boost_round=1000,
-            callbacks=[lgb.early_stopping(100), lgb.log_evaluation(0)]
+            num_boost_round=num_boost_round,
+            callbacks=[lgb.early_stopping(early_stopping_rounds), lgb.log_evaluation(0)]
         )
         
         # Apply calibration
@@ -441,28 +396,28 @@ class ModelTrainer:
             self.logger.info("[DRY RUN] Would save model artifacts")
             return {}
         
-        self.logger.info(f"Saving model artifacts for version: {self.model_version}")
+        self.logger.info(f"Saving model artifacts for: {self.model_name}")
         
         # Create model directory
-        model_dir = Path(self.models_dir) / self.model_version
+        model_dir = Path(self.models_dir) / self.model_name
         model_dir.mkdir(parents=True, exist_ok=True)
         
         saved_files = {}
         
         # Save base model
-        base_model_file = model_dir / f"lightgbm_model_{self.model_version}.pkl"
+        base_model_file = model_dir / "lightgbm_model.pkl"
         joblib.dump(results['base_model'], base_model_file)
         saved_files['base_model'] = str(base_model_file)
         self.logger.info(f"Base model saved to: {base_model_file}")
         
         # Save calibrator
-        calibrator_file = model_dir / f"probability_calibrator_{self.model_version}.pkl"
+        calibrator_file = model_dir / "probability_calibrator.pkl"
         joblib.dump(results['calibrator'], calibrator_file)
         saved_files['calibrator'] = str(calibrator_file)
         self.logger.info(f"Calibrator saved to: {calibrator_file}")
         
         # Save feature list
-        feature_list_file = model_dir / f"feature_list_{self.model_version}.txt"
+        feature_list_file = model_dir / "feature_list.txt"
         with open(feature_list_file, 'w') as f:
             for feature in feature_names:
                 f.write(f"{feature}\n")
@@ -470,7 +425,7 @@ class ModelTrainer:
         self.logger.info(f"Feature list saved to: {feature_list_file}")
         
         # Save categorical features
-        categorical_file = model_dir / f"categorical_features_{self.model_version}.txt"
+        categorical_file = model_dir / "categorical_features.txt"
         with open(categorical_file, 'w') as f:
             for feature in self.available_categorical_features:
                 f.write(f"{feature}\n")
@@ -478,7 +433,7 @@ class ModelTrainer:
         self.logger.info(f"Categorical features saved to: {categorical_file}")
         
         # Save feature importance
-        importance_file = model_dir / f"feature_importance_{self.model_version}.csv"
+        importance_file = model_dir / "feature_importance.csv"
         results['feature_importance'].to_csv(importance_file, index=False)
         saved_files['feature_importance'] = str(importance_file)
         self.logger.info(f"Feature importance saved to: {importance_file}")
@@ -514,7 +469,7 @@ class ModelTrainer:
             # Summary
             metrics = results['metrics']
             self.logger.info(f"Final summary:")
-            self.logger.info(f"  Model version: {self.model_version}")
+            self.logger.info(f"  Model name: {self.model_name}")
             self.logger.info(f"  AUC improvement: {metrics['auc_base']:.4f} -> {metrics['auc_calibrated']:.4f}")
             self.logger.info(f"  Calibration improvement: {metrics['calibration_error_base']:.3f} -> {metrics['calibration_error_calibrated']:.3f}")
             self.logger.info(f"  Training samples: {len(X_train_fit):,}")
@@ -614,11 +569,9 @@ class ModelTrainer:
 
 def main():
     parser = argparse.ArgumentParser(description='Train horse racing prediction model')
-    parser.add_argument('--model-version', '-v', 
-                       default='v1',
-                       help='Model version (e.g., v1, v2, v3)')
-    parser.add_argument('--experiment-name', '-e',
-                       help='Optional experiment name for this training run')
+    parser.add_argument('--model-name', '-m', 
+                       default='default',
+                       help='Model name (e.g., v1, v2, default)')
     parser.add_argument('--dry-run', 
                        action='store_true',
                        help='Test run without saving model artifacts')
@@ -627,8 +580,7 @@ def main():
     
     try:
         trainer = ModelTrainer(
-            model_version=args.model_version,
-            experiment_name=args.experiment_name,
+            model_name=args.model_name,
             dry_run=args.dry_run
         )
         

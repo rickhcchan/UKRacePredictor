@@ -16,7 +16,7 @@ Configuration is loaded from:
 2. config/default_settings.conf (fallback) - default settings, in git
 
 Usage:
-    python encode_incremental.py [--dry-run] [--force-rebuild] [--test-days N]
+    python encode_incremental.py [--dry-run] [--force-rebuild]
     
 Examples:
     # Encode all new data since last encoded date
@@ -48,11 +48,13 @@ sys.path.append(str(script_dir))
 from common import setup_logging, convert_to_24h_time
 
 class IncrementalEncoder:
-    def __init__(self, dry_run: bool = False, test_days: Optional[int] = None, force_rebuild: bool = False):
+    def __init__(self, dry_run: bool = False, force_rebuild: bool = False):
         self.dry_run = dry_run
-        self.test_days = test_days
         self.force_rebuild = force_rebuild
         self.logger = setup_logging()
+        
+        if self.dry_run:
+            self.logger.info("🔍 DRY RUN MODE: No data will be modified")
         
         # Load configuration
         self.config = self._load_config()
@@ -936,13 +938,6 @@ class IncrementalEncoder:
             self.delete_encoded_date_data(last_encoded_date)
             start_date = last_encoded_date
         
-        # Apply test_days limit if specified
-        if self.test_days:
-            start_date_dt = pd.to_datetime(start_date)
-            test_end_date = start_date_dt + timedelta(days=self.test_days - 1)
-            max_raw_date = min(pd.to_datetime(max_raw_date), test_end_date).strftime('%Y-%m-%d')
-            self.logger.info(f"TEST MODE: Limiting to {self.test_days} days, ending at {max_raw_date}")
-        
         self.logger.info(f"Encoding from {start_date} to {max_raw_date}")
         
         # Load historical context up to start date
@@ -1001,9 +996,6 @@ def main():
     parser.add_argument('--dry-run', 
                        action='store_true',
                        help='Show what would be done without making changes')
-    parser.add_argument('--test-days', 
-                       type=int,
-                       help='Test mode: only process N days from start date (useful for testing)')
     parser.add_argument('--force-rebuild', 
                        action='store_true',
                        help='Force rebuild: truncate encoded table and start fresh (use after schema changes)')
@@ -1013,7 +1005,6 @@ def main():
     try:
         encoder = IncrementalEncoder(
             dry_run=args.dry_run,
-            test_days=args.test_days,
             force_rebuild=args.force_rebuild
         )
         
