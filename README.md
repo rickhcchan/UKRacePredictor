@@ -82,8 +82,13 @@ graph LR
     B --> C[train.py]
     B --> D[prepare_racecard.py]
     D --> E[predict_races.py]
-    C --> E
+    C -.-> E
 ```
+
+**Pipeline Flow:**
+- `update_race_data.py` → `encode_incremental.py` → Data preparation
+- `encode_incremental.py` → `train.py` → Model training (optional, when retraining)
+- `encode_incremental.py` → `prepare_racecard.py` → `predict_races.py` → Daily predictions
 
 All scripts support `--dry-run` for testing and use minimal, essential parameters for clean operation.
 
@@ -120,7 +125,7 @@ python scripts/predict_races.py                       # Today
 python scripts/predict_races.py --date 2025-07-12     # Tomorrow
 ```
 
-### 3. Model Development Workflow
+### 3. Use Custom Models
 
 ```bash
 # Retrain default model with new data
@@ -130,7 +135,7 @@ python scripts/train.py
 python scripts/train.py --model v1
 python scripts/train.py --model experimental
 
-# Compare models
+# Use custom models
 python scripts/train.py --model my_model
 python scripts/predict_races.py --model my_model
 ```
@@ -209,16 +214,16 @@ python scripts/predict_races.py --model v2
 python scripts/predict_races.py --no-save
 
 # Predict with specific strategy
-python scripts/predict_races.py --strategy place_only
+python scripts/predict_races.py --strategy default
 
 # Predict with both custom model and strategy
-python scripts/predict_races.py --model v2 --strategy custom_aggressive
+python scripts/predict_races.py --model v2 --strategy default
 
 # Predict specific date
 python scripts/predict_races.py --date 2025-07-08
 
 # Combined options
-python scripts/predict_races.py --date 2025-07-08 --model v2 --strategy place_only --no-save
+python scripts/predict_races.py --date 2025-07-08 --model v2 --strategy default --no-save
 ```
 
 ## 📁 Project Structure
@@ -313,7 +318,6 @@ The system supports pluggable betting strategies that determine which horses to 
 ### Available Strategies
 
 - **`default`** - Conservative strategy (20% min probability, 80% second place ratio)
-- **`place_only`** - Same as default but specifically for place betting
 
 ### Using Strategies
 
@@ -321,11 +325,8 @@ The system supports pluggable betting strategies that determine which horses to 
 # Use default strategy
 python scripts/predict_races.py --strategy default
 
-# Use place-only strategy
-python scripts/predict_races.py --strategy place_only
-
 # Combine with specific model
-python scripts/predict_races.py --model v2 --strategy place_only
+python scripts/predict_races.py --model v2 --strategy default
 ```
 
 ### Creating Custom Strategies
