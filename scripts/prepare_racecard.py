@@ -44,8 +44,8 @@ sys.path.append(str(script_dir))
 from common import setup_logging, convert_to_24h_time
 
 class RacecardPreparer:
-    def __init__(self, dry_run: bool = False):
-        self.target_date = datetime.now().strftime('%Y-%m-%d')
+    def __init__(self, date: str = None, dry_run: bool = False):
+        self.target_date = date or datetime.now().strftime('%Y-%m-%d')
         self.dry_run = dry_run
         self.logger = setup_logging()
         
@@ -59,17 +59,15 @@ class RacecardPreparer:
         self.db_path = self._get_config_value('common', 'db_path', 'data/race_data.db')
         self.rpscrape_dir = self._get_config_value('common', 'rpscrape_dir')
         self.timeout = int(self._get_config_value('common', 'timeout', '30'))
-        self.prediction_raw_dir = Path(self._get_config_value('common', 'data_dir', 'data')) / 'prediction' / 'raw'
-        self.prediction_processed_dir = Path(self._get_config_value('common', 'data_dir', 'data')) / 'prediction' / 'processed'
+        self.prediction_dir = Path(self._get_config_value('common', 'data_dir', 'data')) / 'prediction'
         
-        self.logger.info(f"Preparing racecard for today: {self.target_date}")
+        self.logger.info(f"Preparing racecard for date: {self.target_date}")
         self.logger.info(f"Using database: {self.db_path}")
         self.logger.info(f"Using rpscrape at: {self.rpscrape_dir}")
         self.logger.info(f"Using timeout: {self.timeout}s")
         
-        # Create directories if they don't exist
-        self.prediction_raw_dir.mkdir(parents=True, exist_ok=True)
-        self.prediction_processed_dir.mkdir(parents=True, exist_ok=True)
+        # Create directory if it doesn't exist
+        self.prediction_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize historical tracking for features
         self.horse_history = defaultdict(list)
@@ -167,7 +165,7 @@ class RacecardPreparer:
 
     def download_racecard(self) -> bool:
         """Download today's racecard using rpscrape racecards.py."""
-        racecard_file = self.prediction_raw_dir / f"{self.target_date}.json"
+        racecard_file = self.prediction_dir / f"{self.target_date}.json"
         
         if racecard_file.exists():
             self.logger.info(f"Racecard file already exists: {racecard_file}")
@@ -450,7 +448,7 @@ class RacecardPreparer:
 
     def save_prepared_racecard(self, df: pd.DataFrame):
         """Save prepared racecard with engineered features."""
-        output_file = self.prediction_processed_dir / f"racecard_{self.target_date}_prepared.csv"
+        output_file = self.prediction_dir / f"racecard_{self.target_date}_prepared.csv"
         
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would save {len(df)} prepared records to: {output_file}")
@@ -460,7 +458,7 @@ class RacecardPreparer:
 
     def cleanup_raw_racecard(self):
         """Clean up raw racecard file after processing."""
-        raw_file = self.prediction_raw_dir / f"{self.target_date}.json"
+        raw_file = self.prediction_dir / f"{self.target_date}.json"
         
         if raw_file.exists():
             if self.dry_run:
@@ -487,7 +485,7 @@ class RacecardPreparer:
             return False
         
         # Load racecard data
-        racecard_file = self.prediction_raw_dir / f"{self.target_date}.json"
+        racecard_file = self.prediction_dir / f"{self.target_date}.json"
         try:
             with open(racecard_file, 'r', encoding='utf-8') as f:
                 racecard_data = json.load(f)
@@ -794,14 +792,17 @@ class RacecardPreparer:
         return -1, -1
 
 def main():
-    parser = argparse.ArgumentParser(description='Prepare today\'s racecard with feature engineering')
+    parser = argparse.ArgumentParser(description='Prepare racecard with feature engineering')
+    parser.add_argument('--date', 
+                       type=str,
+                       help='Target date for racecard preparation (YYYY-MM-DD). Only today or tomorrow supported, defaults to today')
     parser.add_argument('--dry-run', action='store_true', 
                         help='Show what would be done without making actual changes')
     
     args = parser.parse_args()
     
     try:
-        preparer = RacecardPreparer(dry_run=args.dry_run)
+        preparer = RacecardPreparer(date=args.date, dry_run=args.dry_run)
         
         success = preparer.prepare_racecard()
         
