@@ -310,6 +310,15 @@ class RaceDataUpdater:
             type_counts = df['type'].value_counts()
             self.logger.info(f"Race types in {os.path.basename(csv_file)}: {type_counts.to_dict()}")
             
+            # Show the last race being processed (sorted by start time)
+            if 'off' in df.columns and 'course' in df.columns:
+                # Sort by race start time (off) to find the latest race
+                df_sorted = df.sort_values('off', ascending=True)
+                last_race = df_sorted.iloc[-1]
+                last_off = last_race.get('off', 'Unknown')
+                last_course = last_race.get('course', 'Unknown')
+                self.logger.info(f"Last race processed: {last_course} {last_off}")
+            
             # Rename 'or' column to 'or_rating' to avoid SQL keyword conflict
             if 'or' in df.columns:
                 df = df.rename(columns={'or': 'or_rating'})

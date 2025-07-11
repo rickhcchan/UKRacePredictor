@@ -569,7 +569,7 @@ class ModelTrainer:
 
 def main():
     parser = argparse.ArgumentParser(description='Train horse racing prediction model')
-    parser.add_argument('--model-name', '-m', 
+    parser.add_argument('--model', '-m', 
                        default='default',
                        help='Model name (e.g., v1, v2, default)')
     parser.add_argument('--dry-run', 
@@ -580,7 +580,7 @@ def main():
     
     try:
         trainer = ModelTrainer(
-            model_name=args.model_name,
+            model_name=args.model,
             dry_run=args.dry_run
         )
         
