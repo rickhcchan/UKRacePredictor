@@ -2,13 +2,17 @@
 Racecard preparation script with feature engineering.
 
 This script handles the complete racecard preparation workflow:
-1. Download today's racecard using rpscrape
+1. Download today's racecard using rpscrape (saved to raw/ subdirectory)
 2. Load historical context from database for feature engineering
 3. Apply same feature engineering as training data
 4. Save prepared racecard ready for prediction
+5. Keep raw racecard file for debugging and analysis
 
 The script requires historical data to be available for accurate 14-day features.
 Run update_race_data.py first to ensure yesterday's results are available.
+
+Raw files are saved to: data/prediction/raw/{date}.json
+Processed files are saved to: data/prediction/racecard_{date}_prepared.csv
 
 Configuration is loaded from:
 1. config/user_settings.conf (if exists) - personal settings, not in git
@@ -449,23 +453,24 @@ class RacecardPreparer:
     def save_prepared_racecard(self, df: pd.DataFrame):
         """Save prepared racecard with engineered features."""
         output_file = self.prediction_dir / f"racecard_{self.target_date}_prepared.csv"
+        raw_file = self.prediction_dir / f"{self.target_date}.json"
         
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would save {len(df)} prepared records to: {output_file}")
+            self.logger.info(f"[DRY RUN] Raw racecard would be preserved at: {raw_file}")
         else:
             df.to_csv(output_file, index=False)
-            self.logger.info(f"Saved {len(df)} prepared records to: {output_file}")
+            self.logger.info(f"✓ Saved {len(df)} prepared records to: {output_file}")
+            self.logger.info(f"✓ Raw racecard will be preserved at: {raw_file}")
 
     def cleanup_raw_racecard(self):
-        """Clean up raw racecard file after processing."""
+        """Keep raw racecard file for debugging and analysis."""
         raw_file = self.prediction_dir / f"{self.target_date}.json"
         
         if raw_file.exists():
-            if self.dry_run:
-                self.logger.info(f"[DRY RUN] Would clean up raw racecard file: {raw_file}")
-            else:
-                raw_file.unlink()
-                self.logger.info(f"Cleaned up raw racecard file: {raw_file}")
+            self.logger.info(f"✓ Raw racecard kept for analysis: {raw_file}")
+        else:
+            self.logger.warning(f"Raw racecard file not found: {raw_file}")
 
     def prepare_racecard(self):
         """Main method to run racecard preparation."""
@@ -505,10 +510,10 @@ class RacecardPreparer:
         # Save prepared racecard
         self.save_prepared_racecard(df)
         
-        # Clean up raw file
+        # Confirm raw file preservation (don't delete it)
         self.cleanup_raw_racecard()
         
-        self.logger.info(f"Racecard preparation complete for {self.target_date}")
+        self.logger.info(f"✓ Racecard preparation complete for {self.target_date}")
         return True
 
     # Feature engineering methods (same as encode_incremental.py)
