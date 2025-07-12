@@ -10,7 +10,8 @@
       "dam_id",
       "damsire_id",
       "hg",
-      "sex_rest"
+      "sex_rest",
+      "horse_or_trend_direction"
     ],
     "ordinal": [
       "pattern_id",
@@ -33,6 +34,9 @@
       "horse_going_runs",
       "horse_going_win_pct",
       "horse_days_since_last_run",
+      "horse_last_or_rating",
+      "horse_avg_or_90d",
+      "horse_or_sample_size",
       "jockey_total_runs",
       "jockey_win_pct",
       "jockey_course_runs",
