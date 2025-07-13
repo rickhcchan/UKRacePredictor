@@ -232,8 +232,9 @@ class IncrementalEncoder:
                     damsire_id INTEGER,
                     owner_id INTEGER,
                     
-                    -- Target variable (for training)
-                    win INTEGER,
+                    -- Target variables (for training)
+                    target_win INTEGER,     -- Position == 1 (win)
+                    target_top3 INTEGER,    -- Position <= 3 (place)
                     
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (race_id, horse_id)
@@ -539,10 +540,16 @@ class IncrementalEncoder:
             'dam_id': row['dam_id'],
             'damsire_id': row['damsire_id'],
             'owner_id': row['owner_id'],
-            
-            # Target
-            'win': 1 if (row['pos'] == 1 or row['pos'] == '1') else 0
         }
+        
+        # Calculate targets
+        win_result = 1 if (row['pos'] == 1 or row['pos'] == '1') else 0
+        place_result = 1 if (row['pos'] in [1, 2, 3] or row['pos'] in ['1', '2', '3']) else 0
+        
+        features.update({
+            'target_win': win_result,
+            'target_top3': place_result
+        })
         
         # Calculate historical statistics
         features.update(self._calculate_horse_stats(horse_records, course, going, dist_f, race_date))

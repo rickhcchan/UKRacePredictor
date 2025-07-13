@@ -236,7 +236,7 @@ UKRacePredictor/
 │   ├── default_settings.conf     # Default system settings
 │   ├── user_settings.conf.template
 │   └── models/
-│       └── default.json          # Model configurations
+│       └── default.json          # Default model configuration
 ├── scripts/
 │   ├── update_race_data.py       # Data collection
 │   ├── encode_incremental.py     # Feature engineering
@@ -280,21 +280,22 @@ Model configurations are stored in `config/models/*.json`:
 ```json
 {
   "model_name": "default",
-  "description": "Model description",
+  "description": "Default model configuration",
   "features": {
     "categorical": ["course_id", "type_id", "sex_id"],
     "ordinal": ["age", "lbs", "dist_f", "ran", "draw"]
   },
-  "training": {
+  "training_params": {
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "boosting_type": "gbdt",
+    "num_leaves": 31,
+    "learning_rate": 0.05
+  },
+  "validation": {
     "test_size": 0.2,
-    "lgb_params": {
-      "objective": "binary",
-      "metric": "binary_logloss",
-      "boosting_type": "gbdt",
-      "num_leaves": 31,
-      "learning_rate": 0.05,
-      "feature_fraction": 0.9
-    }
+    "calibration_size": 0.2,
+    "random_state": 42
   }
 }
 ```

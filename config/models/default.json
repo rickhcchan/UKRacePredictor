@@ -1,6 +1,7 @@
 {
   "model_name": "default",
-  "description": "Default baseline model configuration - template for all model definitions",
+  "target_column": "target_win",
+  "description": "Default win prediction model (1st place only) - optimized feature set with rating trends",
   "features": {
     "categorical": [
       "course_id",
