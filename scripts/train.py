@@ -155,7 +155,8 @@ class ModelTrainer:
         # Get all available features from data
         all_available_features = [col for col in df.columns if col not in [
             'race_id', 'horse_id', 'jockey_id', 'trainer_id', 'owner_id', 
-            'horse_name', 'course', 'race_name', 'date', 'created_at', 'win'
+            'horse_name', 'course', 'race_name', 'date', 'created_at', 
+            'target_win', 'target_top3'  # Exclude target columns
         ]]
         
         # Filter features based on model config
@@ -173,14 +174,15 @@ class ModelTrainer:
         self.available_categorical_features = available_categorical
         
         # Prepare target variable
-        if 'win' not in df.columns:
-            raise ValueError("Target variable 'win' not found in data")
+        target_column = self.model_config.target_column  # Read from model config
+        if target_column not in df.columns:
+            raise ValueError(f"Target variable '{target_column}' not found in data")
         
         X = df[filtered_features]
-        y = df['win']
+        y = df[target_column]
         
         target_distribution = y.value_counts().to_dict()
-        self.logger.info(f"Target distribution: {target_distribution}")
+        self.logger.info(f"Target distribution for '{target_column}': {target_distribution}")
         
         return X, y, filtered_features
 

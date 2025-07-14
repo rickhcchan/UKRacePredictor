@@ -57,6 +57,11 @@ class ModelConfig:
         return self.config.get('description', '')
     
     @property
+    def target_column(self) -> str:
+        """Get target column name."""
+        return self.config.get('target_column', 'target_win')
+    
+    @property
     def categorical_features(self) -> List[str]:
         """Get categorical feature names."""
         return self.config['features']['categorical']
