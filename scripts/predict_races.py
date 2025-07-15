@@ -49,9 +49,13 @@ import numpy as np
 import argparse
 import configparser
 import joblib
+import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List
+
+# Suppress specific pandas FutureWarnings about DataFrame concatenation
+warnings.filterwarnings('ignore', category=FutureWarning, message='.*DataFrame concatenation.*')
 
 # Add the scripts directory to path for imports
 script_dir = Path(__file__).parent
@@ -61,13 +65,13 @@ from common import setup_logging, convert_to_24h_time
 from model_config import load_model_config
 from strategy_factory import StrategyFactory
 
+
 class RacePredictor:
-    def __init__(self, date: str = None, dry_run: bool = False, model_name: str = "default", strategy_name: str = "place_only", no_save: bool = False):
+    def __init__(self, date: str = None, dry_run: bool = False, model_name: str = "default", strategy_name: str = "place_only"):
         self.target_date = date or datetime.now().strftime('%Y-%m-%d')
         self.dry_run = dry_run
         self.model_name = model_name
         self.strategy_name = strategy_name
-        self.no_save = no_save
         self.logger = setup_logging()
         
         # Load model configuration from JSON
@@ -80,6 +84,12 @@ class RacePredictor:
         
         # Load system configuration
         self.config = self._load_config()
+        
+        # Live odds integration removed - sites change too frequently
+        self.live_odds_manager = None
+        
+        # Odds display disabled (live odds integration removed)
+        self.show_odds = False
         
         # Set paths from config
         self.db_path = self._get_config_value('common', 'db_path', 'data/race_data.db')
@@ -254,12 +264,20 @@ class RacePredictor:
         def normalize_race_group(race_group):
             total_prob = race_group['win_probability'].sum()
             if total_prob > 0:
+                race_group = race_group.copy()
                 race_group['win_probability_normalized'] = (race_group['win_probability'] / total_prob) * 100
             else:
+                race_group = race_group.copy()
                 race_group['win_probability_normalized'] = 100 / len(race_group)  # Equal probability
             return race_group
         
-        df = df.groupby('race_id').apply(normalize_race_group).reset_index(drop=True)
+        # Apply normalization to avoid deprecated groupby behavior
+        normalized_groups = []
+        for race_id, race_group in df.groupby('race_id'):
+            normalized_group = normalize_race_group(race_group)
+            normalized_groups.append(normalized_group)
+        
+        df = pd.concat(normalized_groups, ignore_index=True)
         
         return df
 
@@ -370,15 +388,14 @@ class RacePredictor:
                 total_horses_in_race = len(df[df['race_id'] == horse['race_id']])
                 
                 print(f"\n📍 {horse.get('course', 'Unknown')} - {horse.get('time', 'Unknown')} ({total_horses_in_race} horses total)")
-                print("-" * 60)
-                print(f"{'Horse':18} | {'Probability to Win':>15}")
-                print("-" * 60)
+                print("-" * 100)
+                print(f"{'Horse':18} | {'Probability':>11}")
+                print("-" * 100)
                 current_race = race_key
             
             # Format probability display with calibrated percentage only
             calib_prob = horse['win_probability'] * 100
-            
-            print(f"{horse.get('horse_name', 'Unknown'):18} | {calib_prob:13.1f}%")
+            print(f"{horse.get('horse_name', 'Unknown'):18} | {calib_prob:9.1f}%")
         
         # Calculate summary statistics
         total_races = df['race_id'].nunique()
@@ -395,10 +412,6 @@ class RacePredictor:
 
     def save_predictions(self, df: pd.DataFrame):
         """Save predictions to file."""
-        if self.no_save:
-            self.logger.info("Skipping CSV save (--no-save flag set)")
-            return
-            
         output_file = self.prediction_dir / f"predictions_{self.target_date}_{self.model_name}.csv"
         
         if self.dry_run:
@@ -418,11 +431,8 @@ class RacePredictor:
         
         output_df = df[output_columns].copy()
         
-        if not self.no_save:
-            output_df.to_csv(output_file, index=False)
-            self.logger.info(f"✓ Saved {len(output_df)} predictions to: {output_file}")
-        else:
-            self.logger.info(f"✓ Generated {len(output_df)} predictions (not saved to file due to --no-save)")
+        output_df.to_csv(output_file, index=False)
+        self.logger.info(f"✓ Saved {len(output_df)} predictions to: {output_file}")
 
     def run_prediction(self):
         """Main method to run race prediction."""
@@ -469,9 +479,6 @@ def main():
                        type=str,
                        default='default',
                        help='Betting strategy to use (default: default)')
-    parser.add_argument('--no-save',
-                       action='store_true',
-                       help='Do not save predictions to CSV file (console output only)')
     
     args = parser.parse_args()
     
@@ -480,8 +487,7 @@ def main():
             date=args.date,
             dry_run=args.dry_run,
             model_name=args.model,
-            strategy_name=args.strategy,
-            no_save=args.no_save
+            strategy_name=args.strategy
         )
         
         success = predictor.run_prediction()
