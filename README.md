@@ -175,7 +175,7 @@ Trains LightGBM models with probability calibration using JSON configurations.
 python scripts/train.py
 
 # Train specific model configuration
-python scripts/train.py --model v2
+python scripts/train.py --model custom
 
 # Test run without training
 python scripts/train.py --dry-run
@@ -208,22 +208,22 @@ Generates win probability predictions for prepared racecards using JSON model co
 python scripts/predict_races.py
 
 # Predict with specific model
-python scripts/predict_races.py --model v2
+python scripts/predict_races.py --model custom
 
-# Console output only (no CSV file)
-python scripts/predict_races.py --no-save
+# Test run without saving files
+python scripts/predict_races.py --dry-run
 
 # Predict with specific strategy
 python scripts/predict_races.py --strategy default
 
 # Predict with both custom model and strategy
-python scripts/predict_races.py --model v2 --strategy default
+python scripts/predict_races.py --model custom --strategy default
 
 # Predict specific date
 python scripts/predict_races.py --date 2025-07-08
 
 # Combined options
-python scripts/predict_races.py --date 2025-07-08 --model v2 --strategy default --no-save
+python scripts/predict_races.py --date 2025-07-08 --model custom --strategy default --dry-run
 ```
 
 ## 📁 Project Structure
@@ -259,14 +259,13 @@ UKRacePredictor/
 ```bash
 # Train different models
 python scripts/train.py                           # Uses default.json
-python scripts/train.py --model v1                # Uses v1.json  
-python scripts/train.py --model v2                # Uses v2.json
-python scripts/train.py --model no_ratings        # Uses custom model
+python scripts/train.py --model custom            # Uses custom.json  
+python scripts/train.py --model experimental      # Uses experimental.json
 
 # Predict with specific models
 python scripts/predict_races.py                   # Uses default model
-python scripts/predict_races.py --model v1        # Uses v1 model
-python scripts/predict_races.py --model experimental # Uses custom model
+python scripts/predict_races.py --model custom    # Uses custom model
+python scripts/predict_races.py --model experimental # Uses experimental model
 
 # Quick start for simple workflow - just edit default.json
 python scripts/train.py      # Train with your custom default.json
@@ -300,16 +299,89 @@ Model configurations are stored in `config/models/*.json`:
 }
 ```
 
+### Creating Custom Model Configurations
+
+1. **Create a new model config file:**
+```bash
+# Create your model config in config/models/
+cp config/models/default.json config/models/my_model.json
+```
+
+2. **Edit the configuration:**
+```json
+{
+  "model_name": "my_model",
+  "description": "Custom model with specific features",
+  "features": {
+    "categorical": [
+      "course_id", "type_id", "sex_id", "going_id", "jockey_id", "trainer_id"
+    ],
+    "ordinal": [
+      "age", "lbs", "dist_f", "ran", "draw", "or_rating", "ts_rating"
+    ],
+    "historical": [
+      "horse_win_rate_14d", "jockey_win_rate_14d", "trainer_win_rate_14d"
+    ]
+  },
+  "training_params": {
+    "objective": "binary",
+    "metric": "binary_logloss",
+    "boosting_type": "gbdt",
+    "num_leaves": 63,
+    "learning_rate": 0.03,
+    "feature_fraction": 0.8,
+    "bagging_fraction": 0.8,
+    "bagging_freq": 5,
+    "min_child_samples": 20,
+    "reg_alpha": 0.1,
+    "reg_lambda": 0.1
+  },
+  "validation": {
+    "test_size": 0.2,
+    "calibration_size": 0.2,
+    "random_state": 42
+  }
+}
+```
+
+3. **Use your custom model:**
+```bash
+# Train with custom config
+python scripts/train.py --model my_model
+
+# Predict with custom model
+python scripts/predict_races.py --model my_model
+```
+
+### Model Configuration Guidelines
+
+**Feature Categories:**
+- **`categorical`** - Text/ID features (course, jockey, trainer, etc.)
+- **`ordinal`** - Numeric features with meaningful order (age, weight, rating)
+- **`historical`** - Time-based performance features (win rates, form)
+
+**Key Training Parameters:**
+- **`num_leaves`** - Model complexity (31-127, higher = more complex)
+- **`learning_rate`** - Training speed (0.01-0.1, lower = more stable)
+- **`feature_fraction`** - Random feature sampling (0.6-1.0)
+- **`min_child_samples`** - Minimum samples per leaf (10-50)
+
+**Performance Tips:**
+- Start with `default.json` and modify incrementally
+- Test with `--dry-run` before full training
+- Monitor validation scores during training
+- Use fewer features for faster predictions
+
 ### Multiple Model Workflow
 
 ```bash
 # Train different model versions
-python scripts/train.py --model v1     # Uses config/models/v1.json
-python scripts/train.py --model v2     # Uses config/models/v2.json
+python scripts/train.py --model custom     # Uses config/models/custom.json
+python scripts/train.py --model experimental # Uses config/models/experimental.json
 
 # Predict with specific version
-python scripts/predict_races.py --model v1  # Uses v1 config and models
-python scripts/predict_races.py --model v2  # Uses v2 config and models
+python scripts/predict_races.py --model custom  # Uses custom config and models
+python scripts/predict_races.py --model experimental  # Uses experimental config and models
 ```
 
 ## 🎯 Betting Strategies
@@ -318,7 +390,7 @@ The system supports pluggable betting strategies that determine which horses to 
 
 ### Available Strategies
 
-- **`default`** - Conservative strategy (20% min probability, 80% second place ratio)
+- **`default`** - Conservative strategy: min 20% probability, returns highest probability horse only if unique
 
 ### Using Strategies
 
@@ -327,7 +399,7 @@ The system supports pluggable betting strategies that determine which horses to 
 python scripts/predict_races.py --strategy default
 
 # Combine with specific model
-python scripts/predict_races.py --model v2 --strategy default
+python scripts/predict_races.py --model custom --strategy default
 ```
 
 ### Creating Custom Strategies
@@ -335,7 +407,7 @@ python scripts/predict_races.py --model v2 --strategy default
 1. **Create a new strategy file:**
 ```bash
 # Create your strategy in scripts/strategies/
-touch scripts/strategies/my_strategy.py
+touch scripts/strategies/mystrategy.py
 ```
 
 2. **Implement the strategy class:**
@@ -348,11 +420,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 from betting_strategy import BettingStrategy
 
-class MyStrategy(BettingStrategy):
+class MystrategyStrategy(BettingStrategy):  # Class name must be: CapitalCase + "Strategy"
     def __init__(self):
         super().__init__(
-            name="my_strategy",
-            description="Custom betting strategy description"
+            name="mystrategy",  # File name without .py
+            description="Custom betting strategy: min 25% probability, max 2 horses per race"
         )
     
     def select_horses(self, horses: List[Dict[str, Any]], race_data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -366,27 +438,132 @@ class MyStrategy(BettingStrategy):
         Returns:
             List of horses to bet on (can be empty, single, or multiple)
         """
-        # Your custom logic here
-        # Example: bet on horses with >30% probability
-        selected = []
-        for horse in horses:
-            if horse.get('calibrated_probability', 0) > 0.30:
-                selected.append(horse)
-        return selected
+        if not horses:
+            return []
+        
+        # Filter horses above probability threshold
+        threshold = 0.25
+        candidates = [
+            horse for horse in horses 
+            if horse.get('calibrated_probability', 0) >= threshold
+        ]
+        
+        if not candidates:
+            return []
+        
+        # Sort by probability (highest first)
+        candidates.sort(key=lambda h: h.get('calibrated_probability', 0), reverse=True)
+        
+        # Return top 2 horses maximum
+        return candidates[:2]
 ```
 
-3. **Use your strategy:**
-```bash
-python scripts/predict_races.py --strategy my_strategy
+3. **Advanced strategy example:**
+```python
+class AdvancedStrategy(BettingStrategy):
+    def __init__(self):
+        super().__init__(
+            name="advanced",
+            description="Advanced strategy: probability + race context filters"
+        )
+    
+    def select_horses(self, horses: List[Dict[str, Any]], race_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not horses:
+            return []
+        
+        # Get race context
+        field_size = len(horses)
+        race_type = race_data.get('type', '').lower()
+        
+        # Adjust strategy based on race type
+        if 'handicap' in race_type:
+            min_prob = 0.15  # Lower threshold for handicaps
+            max_horses = 3
+        else:
+            min_prob = 0.20  # Higher threshold for non-handicaps  
+            max_horses = 2
+        
+        # Filter by field size
+        if field_size > 16:
+            min_prob += 0.05  # Higher threshold for large fields
+        
+        # Select horses
+        candidates = [
+            horse for horse in horses
+            if horse.get('calibrated_probability', 0) >= min_prob
+        ]
+        
+        # Sort by probability and limit
+        candidates.sort(key=lambda h: h.get('calibrated_probability', 0), reverse=True)
+        return candidates[:max_horses]
 ```
+
+4. **Use your strategy:**
+```bash
+python scripts/predict_races.py --strategy mystrategy
+python scripts/predict_races.py --strategy advanced
+```
+
+### Strategy Naming Convention
+
+**Important**: The strategy factory expects specific naming:
+- **File name**: `mystrategy.py` (lowercase, underscores allowed)
+- **Class name**: `MystrategyStrategy` (capitalize each word, remove underscores, add "Strategy")
+- **Strategy name**: `mystrategy` (same as file name without .py)
+
+**Examples:**
+- `mystrategy.py` → `MystrategyStrategy` → `--strategy mystrategy`
+- `custom_bet.py` → `CustomBetStrategy` → `--strategy custom_bet`
 
 ### Strategy Guidelines
 
+**Available Horse Data:**
+- **`calibrated_probability`** - Main prediction (0.0-1.0)
+- **`horse_name`** - Horse name
+- **`jockey_name`** - Jockey name  
+- **`trainer_name`** - Trainer name
+- **`age`** - Horse age
+- **`lbs`** - Weight carried
+- **`or_rating`** - Official rating
+- **`ts_rating`** - Timeform rating
+- **`draw`** - Starting position
+
+**Available Race Data:**
+- **`course`** - Race course name
+- **`time`** - Race time
+- **`type`** - Race type (handicap, maiden, etc.)
+- **`distance`** - Race distance
+- **`going`** - Ground conditions
+
+**Best Practices:**
 - **Keep it simple** - Complex logic can be hard to debug
 - **Use calibrated_probability** - This is the main prediction value
-- **Consider race context** - Use race_data for filtering
+- **Consider race context** - Use race_data for filtering (field size, race type)
 - **Return empty list** if no bets recommended
 - **Test thoroughly** with different scenarios
+- **Start conservative** - Begin with higher probability thresholds
+- **Log your logic** - Add print statements for debugging
+
+**Common Strategy Patterns:**
+```python
+# Probability threshold
+candidates = [h for h in horses if h.get('calibrated_probability', 0) >= 0.20]
+
+# Top N horses
+horses_sorted = sorted(horses, key=lambda h: h.get('calibrated_probability', 0), reverse=True)
+return horses_sorted[:2]
+
+# Conditional logic
+if len(horses) > 12:  # Large field
+    threshold = 0.25
+else:  # Small field  
+    threshold = 0.15
+
+# Race type filtering
+if 'handicap' in race_data.get('type', '').lower():
+    # Different logic for handicaps
+    pass
+```
 
 ## 🔧 Development
 
@@ -418,7 +595,7 @@ python scripts/test_strategy_system.py
 - 14-day windows strictly exclude the prediction date
 
 ### File Management
-- **CSV outputs are optional** - Use `--no-save` for console-only
+- **CSV outputs are optional** - Use `--dry-run` for testing without file changes
 - **Models are not in git** - Train locally for your data
 - **Strategies are private** - Only `default.py` is version controlled
 
