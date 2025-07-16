@@ -226,6 +226,39 @@ python scripts/predict_races.py --date 2025-07-08
 python scripts/predict_races.py --date 2025-07-08 --model custom --strategy default --dry-run
 ```
 
+### `predict_races_multi.py`
+**NEW**: Multi-model race prediction with union logic and model agreement indicators.
+
+```bash
+# Predict with multiple models
+python scripts/predict_races_multi.py --models win_v2,top3_v2
+
+# Predict for specific date with custom strategy
+python scripts/predict_races_multi.py --models default,win_v2 --date 2025-07-16 --strategy default
+
+# Test run without saving
+python scripts/predict_races_multi.py --models win_v2,top3_v2 --dry-run
+
+# Custom threshold for display
+python scripts/predict_races_multi.py --models win_v2,top3_v2 --threshold 0.25
+```
+
+**Multi-Model Features:**
+- **Union Logic**: Shows horses predicted by ANY model (not intersection)
+- **Model Agreement**: Visual indicators (✓/✗) showing which models selected each horse
+- **Probability Display**: Shows calibrated probability from each model regardless of selection
+- **Single Strategy**: Uses one strategy across all models for consistent selection logic
+
+**Example Output:**
+```
+Race 12345 - Ascot - 14:30
+Horse Name           win_v2    top3_v2    Recommendation
+──────────────────────────────────────────────────────────
+Thunder Bay          22% ✓     25% ✓      ⭐ BET (all models)
+Lightning Strike     21% ✓     17% ✗      💭 Consider (1/2 models)
+Storm Cloud          18% ✗     23% ✓      💭 Consider (1/2 models)
+```
+
 ## 📁 Project Structure
 
 ```
@@ -678,6 +711,114 @@ The race contextual approach delivers significantly improved prediction accuracy
 - **Improved calibration**: Probabilities better reflect actual win rates in different competitive contexts
 
 This represents a major advancement in horse racing prediction methodology, moving from absolute assessment to competitive context analysis.
+
+## 🤖 Multi-Model Predictions
+
+The system supports advanced multi-model predictions that combine insights from multiple trained models for enhanced decision-making confidence.
+
+### Overview
+
+Multi-model prediction provides **model agreement analysis** and **union recommendations** by running multiple models simultaneously and showing where they agree or disagree on horse selections.
+
+### Key Benefits
+
+1. **Confidence Validation**: See when multiple models agree on a selection
+2. **Risk Assessment**: Identify horses selected by only some models
+3. **Probability Comparison**: Compare calibrated probabilities across different model approaches
+4. **Consensus Betting**: Make decisions based on model agreement levels
+
+### Usage
+
+```bash
+# Basic multi-model prediction
+python scripts/predict_races_multi.py --models win_v2,top3_v2
+
+# Custom strategy and threshold
+python scripts/predict_races_multi.py --models default,win_v2,top3_v2 --strategy default --threshold 0.25
+```
+
+### Output Format
+
+The multi-model output shows:
+- **Horse Name**: Horse identifier
+- **Model Columns**: Calibrated probability + selection indicator (✓/✗) for each model
+- **Recommendation**: Overall recommendation based on model agreement
+
+### Recommendation Categories
+
+- **⭐ BET (all models)**: All models selected this horse - highest confidence
+- **💭 Consider (X/Y models)**: Some models selected - moderate confidence  
+- **📊 Watch (above threshold)**: Above probability threshold but not selected
+- *(No indicator)*: Below threshold and not selected by any model
+
+### Strategy Application
+
+- **Single Strategy**: One betting strategy is applied consistently across all models
+- **Union Logic**: Shows horses selected by ANY model (not requiring all models to agree)
+- **Threshold Display**: Only shows horses above probability threshold OR selected by at least one model
+
+### Best Practices
+
+1. **Model Diversity**: Use models with different feature sets for better insights
+2. **Agreement Focus**: Prioritize horses selected by multiple models
+3. **Strategy Consistency**: Use the same strategy across models for fair comparison
+4. **Threshold Tuning**: Adjust threshold based on your risk tolerance
+
+### Example Scenarios
+
+**High Confidence (All Models Agree):**
+```
+Thunder Bay    22% ✓    25% ✓    ⭐ BET (all models)
+```
+
+**Mixed Signals (Partial Agreement):**
+```
+Storm Cloud    18% ✗    23% ✓    💭 Consider (1/2 models)
+```
+
+**Watch List (Above Threshold):**
+```
+Rain Dance     21% ✗    19% ✗    📊 Watch (above threshold)
+```
+
+## 🎧 Testing Strategies
+
+The `test_strategy_system.py` script is provided to validate your strategies and ensure they work as expected within the system.
+
+### Usage
+
+```bash
+# Test all strategies
+python scripts/test_strategy_system.py
+
+# Test specific strategy
+python scripts/test_strategy_system.py --strategy mystrategy
+```
+
+### Script Logic
+
+1. **Load test racecard**: Uses a sample racecard with known outcomes
+2. **Run all strategies**: Executes each strategy in `scripts/strategies/`
+3. **Capture outputs**: Collects and displays selected horses and recommended actions
+4. **Compare with expected**: Checks strategy outputs against expected selections
+
+### Example Output
+
+```
+Testing strategy: Mystrategy
+Race 12345 - Ascot - 14:30
+Horse Name           Calibrated Probability    Selected
+──────────────────────────────────────────────────────────
+Thunder Bay          0.22                      Yes
+Lightning Strike     0.18                      No
+Storm Cloud          0.15                      Yes
+```
+
+### Best Practices
+
+- **Test after changes**: Always test strategies after making changes to logic or parameters
+- **Review outputs**: Check selected horses and recommendations for correctness
+- **Compare with expectations**: Ensure strategy behavior matches your intended logic
 
 ## 🔧 Development
 
