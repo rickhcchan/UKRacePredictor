@@ -67,16 +67,30 @@ from strategy_factory import StrategyFactory
 
 
 class RacePredictor:
-    def __init__(self, date: str = None, dry_run: bool = False, model_name: str = "default", strategy_name: str = "place_only"):
+    def __init__(self, date: str = None, dry_run: bool = False, model_names: List[str] = None, strategy_name: str = "default", threshold: float = 0.20):
         self.target_date = date or datetime.now().strftime('%Y-%m-%d')
         self.dry_run = dry_run
-        self.model_name = model_name
+        self.model_names = model_names or ["default"]
         self.strategy_name = strategy_name
+        self.threshold = threshold
         self.logger = setup_logging()
         
-        # Load model configuration from JSON
-        self.model_config = load_model_config(self.model_name)
-        self.logger.info(f"Loaded model config: {self.model_config.description}")
+        # Support backward compatibility - if single model passed as string
+        if isinstance(self.model_names, str):
+            self.model_names = [self.model_names]
+        
+        # Determine if this is single or multi-model mode
+        self.is_multi_model = len(self.model_names) > 1
+        
+        # Load model configurations
+        self.model_configs = {}
+        for model_name in self.model_names:
+            self.model_configs[model_name] = load_model_config(model_name)
+            self.logger.info(f"Loaded model config for {model_name}: {self.model_configs[model_name].description}")
+        
+        # For backward compatibility, set model_name and model_config
+        self.model_name = self.model_names[0] if len(self.model_names) == 1 else "multi"
+        self.model_config = self.model_configs[self.model_names[0]] if len(self.model_names) == 1 else None
         
         # Load betting strategy
         self.strategy = StrategyFactory.create_strategy(self.strategy_name)
@@ -100,10 +114,14 @@ class RacePredictor:
         self.logger.info(f"Using model name: {self.model_name}")
         self.logger.info(f"Models directory: {self.models_dir}")
         
-        # Model components
-        self.base_model = None
-        self.calibrator = None
-        self.feature_list = None
+        # Model components for single/multi model support
+        if self.is_multi_model:
+            self.models = {}  # {model_name: {'base_model': ..., 'calibrator': ..., 'features': ...}}
+        else:
+            # Backward compatibility - single model
+            self.base_model = None
+            self.calibrator = None
+            self.feature_list = None
 
     def _get_config_value(self, section: str, key: str, default: str = None) -> str:
         """Get a configuration value with fallback to default."""
@@ -145,7 +163,85 @@ class RacePredictor:
         return config
 
     def load_models(self) -> bool:
-        """Load the trained model, calibrator, and feature list."""
+        """Load the trained model(s), calibrator(s), and feature list(s)."""
+        if self.is_multi_model:
+            return self._load_multiple_models()
+        else:
+            return self._load_single_model(self.model_names[0])
+
+    def _load_multiple_models(self) -> bool:
+        """Load multiple models for multi-model prediction."""
+        for model_name in self.model_names:
+            if not self._load_single_model_multi(model_name):
+                return False
+        return True
+
+    def _load_single_model_multi(self, model_name: str) -> bool:
+        """Load a single model's components for multi-model mode."""
+        try:
+            model_dir = self.models_dir / model_name
+            
+            if not model_dir.exists():
+                model_dir = self.models_dir
+                self.logger.warning(f"Model directory not found for {model_name}, using root models directory: {model_dir}")
+            
+            # Load base model
+            model_file = model_dir / "lightgbm_model.pkl"
+            if not model_file.exists():
+                model_file = model_dir / f"lightgbm_model_{model_name}.pkl"
+            if not model_file.exists():
+                model_file = model_dir / "lightgbm_model_clean.pkl"
+            
+            if not model_file.exists():
+                self.logger.error(f"Model file not found for {model_name}: {model_file}")
+                return False
+            
+            base_model = joblib.load(model_file)
+            self.logger.info(f"✓ Loaded base model for {model_name} from: {model_file}")
+            
+            # Load calibrator
+            calibrator_file = model_dir / "probability_calibrator.pkl"
+            if not calibrator_file.exists():
+                calibrator_file = model_dir / f"probability_calibrator_{model_name}.pkl"
+            
+            if not calibrator_file.exists():
+                self.logger.error(f"Calibrator file not found for {model_name}: {calibrator_file}")
+                return False
+            
+            calibrator = joblib.load(calibrator_file)
+            self.logger.info(f"✓ Loaded calibrator for {model_name} from: {calibrator_file}")
+            
+            # Load feature list
+            feature_list_file = model_dir / "feature_list.txt"
+            if not feature_list_file.exists():
+                feature_list_file = model_dir / f"feature_list_{model_name}.txt"
+            if not feature_list_file.exists():
+                feature_list_file = model_dir / "feature_list_clean.txt"
+            
+            if feature_list_file.exists():
+                with open(feature_list_file, 'r') as f:
+                    feature_list = [line.strip() for line in f.readlines() if line.strip()]
+                self.logger.info(f"✓ Loaded feature list for {model_name} with {len(feature_list)} features")
+            else:
+                feature_list = self.model_configs[model_name].get_all_features()
+                self.logger.info(f"✓ Using config feature list for {model_name} with {len(feature_list)} features")
+            
+            # Store model components
+            self.models[model_name] = {
+                'base_model': base_model,
+                'calibrator': calibrator,
+                'features': feature_list,
+                'config': self.model_configs[model_name]
+            }
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error loading model {model_name}: {e}")
+            return False
+
+    def _load_single_model(self, model_name: str) -> bool:
+        """Load a single model for backward compatibility."""
         try:
             model_dir = self.models_dir / self.model_name
             
@@ -207,6 +303,41 @@ class RacePredictor:
         except Exception as e:
             self.logger.error(f"Error loading models: {e}")
             return False
+            if not calibrator_file.exists():
+                # Try old naming convention for backward compatibility
+                calibrator_file = model_dir / f"probability_calibrator_{self.model_name}.pkl"
+            
+            if not calibrator_file.exists():
+                self.logger.error(f"Calibrator file not found: {calibrator_file}")
+                return False
+            
+            self.calibrator = joblib.load(calibrator_file)
+            self.logger.info(f"✓ Loaded calibrator from: {calibrator_file}")
+            
+            # Load feature list - prefer actual model feature list over config
+            feature_list_file = model_dir / "feature_list.txt"
+            if not feature_list_file.exists():
+                # Try old naming convention for backward compatibility
+                feature_list_file = model_dir / f"feature_list_{self.model_name}.txt"
+            if not feature_list_file.exists():
+                # Try alternative naming
+                feature_list_file = model_dir / "feature_list_clean.txt"
+            
+            if feature_list_file.exists():
+                with open(feature_list_file, 'r') as f:
+                    self.feature_list = [line.strip() for line in f.readlines() if line.strip()]
+                self.logger.info(f"✓ Loaded feature list from file with {len(self.feature_list)} features")
+            else:
+                # Fallback to config feature list
+                self.feature_list = self.model_config.all_features
+                self.logger.info(f"✓ Using feature list from config with {len(self.feature_list)} features")
+                self.logger.warning("Feature list file not found, using config - there may be mismatches")
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error loading models: {e}")
+            return False
 
     def load_prepared_racecard(self) -> Optional[pd.DataFrame]:
         """Load prepared racecard with engineered features."""
@@ -230,6 +361,13 @@ class RacePredictor:
         """Make predictions on the prepared racecard data."""
         self.logger.info("Making predictions...")
         
+        if self.is_multi_model:
+            return self._make_multi_model_predictions(df)
+        else:
+            return self._make_single_model_predictions(df)
+
+    def _make_single_model_predictions(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Make predictions using a single model (backward compatibility)."""
         # Check feature alignment
         missing_features = [f for f in self.feature_list if f not in df.columns]
         if missing_features:
@@ -256,6 +394,95 @@ class RacePredictor:
         self.logger.info(f"Calibrated probability range: {calibrated_predictions.min():.3f} - {calibrated_predictions.max():.3f}")
         
         return df
+
+    def _make_multi_model_predictions(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Make predictions using multiple models and combine with union logic."""
+        df = df.copy()
+        model_predictions = {}
+        
+        # Make predictions for each model
+        for model_name in self.model_names:
+            model = self.models[model_name]
+            self.logger.info(f"Making predictions with model: {model_name}")
+            
+            # Check feature alignment for this model
+            missing_features = [f for f in model['features'] if f not in df.columns]
+            if missing_features:
+                self.logger.warning(f"Missing features for model {model_name}: {missing_features}")
+                # Fill missing features with defaults
+                for feature in missing_features:
+                    df[feature] = 0
+            
+            # Prepare features for this model
+            X = df[model['features']]
+            
+            # Make base predictions
+            base_predictions = model['base_model'].predict(X, num_iteration=model['base_model'].best_iteration)
+            
+            # Apply calibration
+            calibrated_predictions = model['calibrator'].predict(base_predictions)
+            
+            # Store model predictions
+            model_predictions[model_name] = {
+                'base_probability': base_predictions,
+                'win_probability': calibrated_predictions
+            }
+            
+            # Add model-specific columns to dataframe
+            df[f'base_probability_{model_name}'] = base_predictions
+            df[f'win_probability_{model_name}'] = calibrated_predictions
+            
+            self.logger.info(f"Model {model_name} - Base range: {base_predictions.min():.3f} - {base_predictions.max():.3f}")
+            self.logger.info(f"Model {model_name} - Calibrated range: {calibrated_predictions.min():.3f} - {calibrated_predictions.max():.3f}")
+        
+        # Calculate union predictions (maximum of all models)
+        # Use max to show the highest confidence any model has in each horse
+        all_base_probs = np.array([model_predictions[name]['base_probability'] for name in self.model_names])
+        all_win_probs = np.array([model_predictions[name]['win_probability'] for name in self.model_names])
+        
+        df['base_probability'] = np.max(all_base_probs, axis=0)
+        df['win_probability'] = np.max(all_win_probs, axis=0)
+        
+        # Add model agreement analysis
+        df['model_agreement'] = self._calculate_model_agreement(model_predictions, df)
+        df['models_agreeing'] = self._count_agreeing_models(model_predictions, df)
+        
+        self.logger.info(f"Union predictions - Base range: {df['base_probability'].min():.3f} - {df['base_probability'].max():.3f}")
+        self.logger.info(f"Union predictions - Calibrated range: {df['win_probability'].min():.3f} - {df['win_probability'].max():.3f}")
+        
+        return df
+
+    def _calculate_model_agreement(self, model_predictions: dict, df: pd.DataFrame) -> np.ndarray:
+        """Calculate the agreement score between models (0-1, higher = more agreement)."""
+        # For each horse, calculate the standard deviation of predictions
+        # Lower std = higher agreement
+        all_probs = np.array([model_predictions[name]['win_probability'] for name in self.model_names])
+        std_dev = np.std(all_probs, axis=0)
+        
+        # Convert to agreement score (1 - normalized std)
+        max_std = np.max(std_dev) if np.max(std_dev) > 0 else 1
+        agreement = 1 - (std_dev / max_std)
+        
+        return agreement
+
+    def _count_agreeing_models(self, model_predictions: dict, df: pd.DataFrame) -> np.ndarray:
+        """Count how many models would select each horse using the strategy threshold."""
+        # Apply strategy to each model's predictions to see which horses would be selected
+        counts = np.zeros(len(df))
+        
+        for i, race_group in df.groupby('race_id'):
+            race_indices = race_group.index
+            
+            for model_name in self.model_names:
+                model_probs = model_predictions[model_name]['win_probability'][race_indices]
+                
+                # Apply threshold logic (simplified - using basic threshold)
+                threshold = self.threshold if hasattr(self, 'threshold') else 0.15
+                selected = model_probs >= threshold
+                
+                counts[race_indices] += selected.astype(int)
+        
+        return counts
 
     def normalize_race_probabilities(self, df: pd.DataFrame) -> pd.DataFrame:
         """Normalize probabilities within each race to sum to 100%."""
@@ -304,6 +531,9 @@ class RacePredictor:
                     'age': horse_row.get('age', 0),
                     'course_name': horse_row.get('course', 'Unknown'),  # Add course for strategy use
                     'race_time': horse_row.get('time', 'Unknown'),      # Add time for strategy use
+                    # Add multi-model specific data
+                    'model_agreement': horse_row.get('model_agreement', 1.0) if self.is_multi_model else 1.0,
+                    'models_agreeing': horse_row.get('models_agreeing', 1) if self.is_multi_model else 1,
                     # Add all other columns
                     **{col: horse_row.get(col) for col in horse_row.index}
                 }
@@ -328,7 +558,8 @@ class RacePredictor:
                 bet_horses.extend(selected_horses)
         
         # Prepare header content
-        header_line = f"🏇 UK HORSE RACING PREDICTIONS - {self.strategy.name.upper()}"
+        model_info = f" ({', '.join(self.model_names)})" if self.is_multi_model else f" ({self.model_name})"
+        header_line = f"🏇 UK HORSE RACING PREDICTIONS{model_info} - {self.strategy.name.upper()}"
         recommendations_line = "🎯 BETTING RECOMMENDATIONS:"
         strategy_line = f"💡 {self.strategy.description}"
         
@@ -358,8 +589,18 @@ class RacePredictor:
                 'trainer': horse.get('trainer', 'Unknown'),
                 'lbs': horse.get('weight', 0),
                 'draw': horse.get('draw', 0),
-                'age': horse.get('age', 0)
+                'age': horse.get('age', 0),
+                'model_agreement': horse.get('model_agreement', 1.0),
+                'models_agreeing': horse.get('models_agreeing', 1)
             }
+            
+            # Add model-specific probabilities if in multi-model mode
+            if self.is_multi_model:
+                for model_name in self.model_names:
+                    prob_col = f'win_probability_{model_name}'
+                    if prob_col in df.columns:
+                        horse_row[prob_col] = horse.get(prob_col, 0.0)
+            
             bet_horses_df = pd.concat([bet_horses_df, pd.DataFrame([horse_row])], ignore_index=True)
         
         # Sort by time (if available), then course, then calibrated probability
@@ -389,13 +630,44 @@ class RacePredictor:
                 
                 print(f"\n📍 {horse.get('course', 'Unknown')} - {horse.get('time', 'Unknown')} ({total_horses_in_race} horses total)")
                 print("-" * 100)
-                print(f"{'Horse':18} | {'Probability':>11}")
+                
+                if self.is_multi_model:
+                    # Multi-model header
+                    header = f"{'Horse':18}"
+                    for model_name in self.model_names:
+                        header += f" | {model_name[:10]:>12}"
+                    print(header)
+                else:
+                    # Single model header
+                    print(f"{'Horse':18} | {'Probability':>11}")
+                
                 print("-" * 100)
                 current_race = race_key
             
-            # Format probability display with calibrated percentage only
+            # Format probability display
             calib_prob = horse['win_probability'] * 100
-            print(f"{horse.get('horse_name', 'Unknown'):18} | {calib_prob:9.1f}%")
+            
+            if self.is_multi_model:
+                # Multi-model display with consistent column widths
+                line = f"{horse.get('horse_name', 'Unknown'):18}"
+                
+                # Add individual model probabilities with tick/cross indicators
+                for model_name in self.model_names:
+                    model_prob_col = f'win_probability_{model_name}'
+                    model_prob = horse.get(model_prob_col, 0.0) * 100
+                    
+                    # Use simple threshold check for individual model indicators
+                    # This shows if the individual model probability meets the basic threshold
+                    threshold = 0.20  # 20% threshold for t20win strategy
+                    indicator = "✓" if horse.get(model_prob_col, 0.0) >= threshold else "✗"
+                    
+                    # Format with consistent width: 12 chars total to match header
+                    line += f" | {model_prob:7.1f}% {indicator:>2}"
+                
+                print(line)
+            else:
+                # Single model display
+                print(f"{horse.get('horse_name', 'Unknown'):18} | {calib_prob:9.1f}%")
         
         # Calculate summary statistics
         total_races = df['race_id'].nunique()
@@ -405,6 +677,16 @@ class RacePredictor:
         print(f"Total races analyzed: {total_races}")
         print(f"Races with bet recommendations: {bet_race_count}")
         print(f"Bet coverage: {bet_race_count/total_races*100:.1f}% of races")
+        
+        if self.is_multi_model:
+            print(f"Models used: {', '.join(self.model_names)}")
+            print(f"Union strategy: Maximum ensemble")
+            if len(bet_horses_df) > 0:
+                avg_agreement = bet_horses_df['model_agreement'].mean() * 100
+                print(f"Average model agreement: {avg_agreement:.1f}%")
+        else:
+            print(f"Model used: {self.model_name}")
+        
         print(f"Strategy used: {self.strategy.name} - {self.strategy.description}")
         if len(bet_horses_df) > 0:
             print(f"Average recommended horse probability: {bet_horses_df['win_probability'].mean()*100:.1f}%")
@@ -412,7 +694,12 @@ class RacePredictor:
 
     def save_predictions(self, df: pd.DataFrame):
         """Save predictions to file."""
-        output_file = self.prediction_dir / f"predictions_{self.target_date}_{self.model_name}.csv"
+        # Create filename based on single or multi-model mode
+        if self.is_multi_model:
+            model_suffix = "_".join(self.model_names)
+            output_file = self.prediction_dir / f"predictions_{self.target_date}_multi_{model_suffix}.csv"
+        else:
+            output_file = self.prediction_dir / f"predictions_{self.target_date}_{self.model_name}.csv"
         
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would save {len(df)} predictions to: {output_file}")
@@ -424,15 +711,32 @@ class RacePredictor:
             'win_probability', 'win_probability_normalized', 'base_probability'
         ]
         
+        # Add multi-model specific columns
+        if self.is_multi_model:
+            output_columns.extend(['model_agreement', 'models_agreeing'])
+            # Add individual model predictions
+            for model_name in self.model_names:
+                base_col = f'base_probability_{model_name}'
+                win_col = f'win_probability_{model_name}'
+                if base_col in df.columns:
+                    output_columns.append(base_col)
+                if win_col in df.columns:
+                    output_columns.append(win_col)
+        
         # Add additional columns if they exist
         for col in ['age', 'draw', 'lbs', 'jockey_id', 'trainer_id']:
             if col in df.columns:
                 output_columns.append(col)
         
-        output_df = df[output_columns].copy()
+        # Filter columns that actually exist in the dataframe
+        existing_columns = [col for col in output_columns if col in df.columns]
+        output_df = df[existing_columns].copy()
         
         output_df.to_csv(output_file, index=False)
         self.logger.info(f"✓ Saved {len(output_df)} predictions to: {output_file}")
+        
+        if self.is_multi_model:
+            self.logger.info(f"Multi-model predictions saved with {len(self.model_names)} models: {', '.join(self.model_names)}")
 
     def run_prediction(self):
         """Main method to run race prediction."""
@@ -474,7 +778,7 @@ def main():
     parser.add_argument('--model', '-m',
                        type=str,
                        default='default',
-                       help='Model name to use (default: default)')
+                       help='Model name(s) to use. For single model: --model win. For multiple models: --model win,top3 (comma-separated, no spaces)')
     parser.add_argument('--strategy', '-s',
                        type=str,
                        default='default',
@@ -483,10 +787,19 @@ def main():
     args = parser.parse_args()
     
     try:
+        # Parse comma-separated model names
+        model_names = [name.strip() for name in args.model.split(',') if name.strip()]
+        
+        # Log the mode being used
+        if len(model_names) > 1:
+            print(f"🔗 Multi-model mode: Using {len(model_names)} models: {', '.join(model_names)}")
+        else:
+            print(f"📊 Single-model mode: Using model: {model_names[0]}")
+        
         predictor = RacePredictor(
             date=args.date,
             dry_run=args.dry_run,
-            model_name=args.model,
+            model_names=model_names,  # Pass list of model names
             strategy_name=args.strategy
         )
         
