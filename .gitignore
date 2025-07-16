@@ -1,14 +1,3 @@
-# Configuration files (user-specific)
-config/user_settings.conf
-
-# Model configuration files (ignore all except default.json)
-config/models/*.json
-!config/models/default.json
-
-# Strategy files (ignore all except default.py)
-scripts/strategies/*.py
-!scripts/strategies/default.py
-
 # Ignore all .py files in the root folder only
 /*.py
 
