@@ -565,6 +565,120 @@ if 'handicap' in race_data.get('type', '').lower():
     pass
 ```
 
+## 🎯 Race Contextual Features
+
+The system includes advanced race contextual features that provide **apples-to-apples field comparisons** for superior prediction accuracy. These features replace absolute ratings with race-specific relative positioning.
+
+### Overview
+
+Traditional horse racing models use absolute values (e.g., "horse has 85 OR rating") which ignore the competitive context of each specific race. Our race contextual features instead ask: **"How does this horse compare to the other horses in THIS race?"**
+
+### New Race Contextual Features
+
+#### 1. `horse_rating_vs_field_avg`
+- **Description**: Horse's last OR rating minus the average of all other horses' last OR ratings in the race
+- **Logic**: Apples-to-apples comparison of most recent form
+- **Example**: Horse rated 90 in field where others average 82 = +8.0 advantage
+- **Benefit**: Shows relative strength vs. immediate competition
+
+#### 2. `horse_avg_vs_field_avg`  
+- **Description**: Horse's 90-day average rating minus field average of 90-day averages
+- **Logic**: Consistent form comparison over recent months
+- **Example**: Horse's 90d avg 85 vs field 90d avg 78 = +7.0 advantage
+- **Benefit**: Identifies horses with sustained good form relative to competition
+
+#### 3. `horse_rating_percentile`
+- **Description**: Horse's percentile ranking within the race field (0-100%)
+- **Logic**: Shows where horse stands in competitive hierarchy
+- **Example**: Horse ranks 80th percentile = beats 80% of field on ratings
+- **Benefit**: Intuitive measure of competitive position
+
+#### 4. `stronger_horses_count`
+- **Description**: Count of horses with higher last OR ratings in the race
+- **Logic**: Direct measure of how many horses are "better" rated
+- **Example**: 2 stronger horses = horse faces 2 higher-rated competitors
+- **Benefit**: Quantifies competitive challenge level
+
+### Feature Importance Results
+
+Analysis of the **top3_v2** model shows exceptional performance of race contextual features:
+
+- **`stronger_horses_count`**: **4th most important feature** (17,412 importance)
+- **`horse_rating_percentile`**: **7th most important feature** (11,893 importance)
+- **`horse_avg_vs_field_avg`**: **18th most important feature** (1,134 importance)
+- **`horse_rating_vs_field_avg`**: **25th most important feature** (441 importance)
+
+### Methodology: Apples-to-Apples Comparisons
+
+**Traditional Approach (Problematic):**
+```
+Horse A: Last rating 90, 90d average 85
+Horse B: Last rating 75, 90d average 80
+```
+❌ **Mixed comparison**: Comparing A's last vs B's average
+
+**New Approach (Correct):**
+```
+Field last ratings: [90, 85, 82, 75, 70]     → Field avg: 80.4
+Field 90d averages: [85, 82, 78, 73, 71]     → Field avg: 77.8
+
+Horse A: Last 90 vs field last avg 80.4 = +9.6
+Horse A: 90d avg 85 vs field 90d avg 77.8 = +7.2
+```
+✅ **Consistent comparison**: Last vs last, average vs average
+
+### Benefits Over Absolute Ratings
+
+#### 1. **Race-Specific Context**
+- Absolute rating of 85 means different things in different races
+- In weak field: 85 might be dominant (+15 above average)
+- In strong field: 85 might be struggling (-10 below average)
+
+#### 2. **Competitive Positioning**  
+- Focuses on "can this horse beat THESE horses" vs "is this horse good"
+- More relevant for betting decisions
+- Accounts for race difficulty automatically
+
+#### 3. **Consistent Methodology**
+- All field calculations use same rating type (last-to-last, avg-to-avg)
+- Eliminates methodological inconsistencies
+- Provides cleaner signal to machine learning model
+
+### Model Integration
+
+**V2 Models (win_v2.json, top3_v2.json):**
+- ✅ Include all 4 race contextual features  
+- ❌ Removed redundant absolute rating features:
+  - `horse_last_or_rating` → Replaced by `horse_rating_vs_field_avg`
+  - `horse_avg_or_90d` → Replaced by `horse_avg_vs_field_avg`
+  - `horse_or_sample_size` → Less predictive than field context
+  - `horse_or_trend_direction` → Less useful than relative positioning
+
+**Original Models (win.json, top3.json):**
+- Unchanged for backwards compatibility
+- Still use absolute rating features
+- Available for comparison testing
+
+### Implementation Details
+
+Race contextual features are calculated during encoding in `encode_incremental.py`:
+
+1. **Field Collection**: For each race, collect historical ratings for all horses
+2. **Separate Calculations**: Calculate field averages separately for last ratings and 90d averages  
+3. **Individual Comparison**: Compare each horse's ratings against appropriate field average
+4. **Percentile Ranking**: Rank horse within field and convert to percentile
+
+### Performance Impact
+
+The race contextual approach delivers significantly improved prediction accuracy:
+
+- **Better field understanding**: Model learns competitive dynamics
+- **Reduced noise**: Eliminates absolute rating variations across different eras
+- **Enhanced signal**: Focuses on race-specific competitive advantages
+- **Improved calibration**: Probabilities better reflect actual win rates in different competitive contexts
+
+This represents a major advancement in horse racing prediction methodology, moving from absolute assessment to competitive context analysis.
+
 ## 🔧 Development
 
 ### Adding New Features

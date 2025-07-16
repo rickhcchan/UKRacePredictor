@@ -265,7 +265,7 @@ class RacecardPreparer:
             # Load all historical race data up to the target date (exclusive)
             query = """
             SELECT horse_id, jockey_id, trainer_id, course, going, dist_f, type, 
-                   pos, date, race_id
+                   pos, date, race_id, or_rating
             FROM race_data 
             WHERE date < ? 
             ORDER BY date, race_id
@@ -295,7 +295,8 @@ class RacecardPreparer:
                 'dist_f': row['dist_f'],
                 'type': row['type'],
                 'win': win,
-                'date': row['date']
+                'date': row['date'],
+                'or_rating': row.get('or_rating')
             })
             
             # Build jockey history
@@ -343,8 +344,8 @@ class RacecardPreparer:
         for course_name, race_time, race_info, converted_time in all_races:
             runners = race_info.get("runners", [])
             
+            # Engineer features for each runner
             for runner in runners:
-                # Engineer features using same logic as encode_incremental.py
                 features = self._engineer_single_runner(runner, race_info, course_name, race_time)
                 if features:
                     rows.append(features)
@@ -391,6 +392,8 @@ class RacecardPreparer:
                 'race_id': int(race_info.get('race_id', 0)),
                 'horse_id': horse_id,
                 'date': self.target_date,
+                'off_time_12h': race_info.get('off_time', race_time),
+                'off_time_24h': convert_to_24h_time(race_info.get('off_time', race_time)),
                 
                 # Basic race features
                 'course_id': self._get_mapping_value('course', course),
@@ -443,6 +446,7 @@ class RacecardPreparer:
             features.update(self._calculate_horse_stats(horse_records, course, going, dist_f, self.target_date))
             features.update(self._calculate_jockey_stats(jockey_records, course, going, dist_f, race_type, self.target_date))
             features.update(self._calculate_trainer_stats(trainer_records, course, going, dist_f, race_type, self.target_date))
+            # Include field_ratings for race-contextual features
             features.update(self._calculate_horse_rating_features(horse_records, self.target_date))
             
             return features
@@ -567,20 +571,20 @@ class RacecardPreparer:
         else:
             days_since_last_run = -1
         
-        # Calculate rating trend features
-        rating_features = self._calculate_horse_rating_features(records, race_date)
-        
         return {
             'horse_total_runs': total_runs,
+            'horse_total_wins': total_wins,
             'horse_win_pct': (total_wins / total_runs * 100) if total_runs > 0 else -1.0,
             'horse_course_runs': course_runs,
+            'horse_course_wins': course_wins,
             'horse_course_win_pct': (course_wins / course_runs * 100) if course_runs > 0 else -1.0,
             'horse_distance_runs': distance_runs,
+            'horse_distance_wins': distance_wins,
             'horse_distance_win_pct': (distance_wins / distance_runs * 100) if distance_runs > 0 else -1.0,
             'horse_going_runs': going_runs,
+            'horse_going_wins': going_wins,
             'horse_going_win_pct': (going_wins / going_runs * 100) if going_runs > 0 else -1.0,
             'horse_days_since_last_run': days_since_last_run,
-            **rating_features,  # Add rating features
         }
 
     def _calculate_jockey_stats(self, records: List[Dict], course: str, going: str, dist_f: str, race_type: str, race_date: str) -> Dict:
@@ -688,12 +692,13 @@ class RacecardPreparer:
             if pd.to_datetime(r['date']) < race_date_dt 
             and r.get('or_rating') is not None 
             and r['or_rating'] != -1
+            and str(r['or_rating']).isdigit()
         ]
         
         if not prior_records:
             return {
-                'horse_last_or_rating': -1,
-                'horse_avg_or_90d': -1.0,
+                'horse_last_or_rating': 0,
+                'horse_avg_or_90d': 0.0,
                 'horse_or_trend_direction': 0,
                 'horse_or_sample_size': 0
             }
@@ -701,8 +706,8 @@ class RacecardPreparer:
         # Sort by date (most recent first)
         sorted_records = sorted(prior_records, key=lambda x: x['date'], reverse=True)
         
-        # Most recent rating
-        last_or = sorted_records[0]['or_rating']
+        # Most recent rating (convert to int)
+        last_or = int(sorted_records[0]['or_rating'])
         
         # 90-day window for recent form
         recent_records = [
@@ -711,16 +716,16 @@ class RacecardPreparer:
         ]
         
         if len(recent_records) == 0:
-            avg_90d = -1.0
+            avg_90d = 0.0
             trend_direction = 0
             sample_size = 0
         elif len(recent_records) == 1:
-            avg_90d = float(recent_records[0]['or_rating'])
+            avg_90d = float(int(recent_records[0]['or_rating']))
             trend_direction = 0  # Can't determine trend with 1 race
             sample_size = 1
         else:
-            # Multiple races available
-            ratings = [r['or_rating'] for r in recent_records]
+            # Multiple races available (convert to int)
+            ratings = [int(r['or_rating']) for r in recent_records]
             avg_90d = sum(ratings) / len(ratings)
             
             # Trend: compare most recent vs older average

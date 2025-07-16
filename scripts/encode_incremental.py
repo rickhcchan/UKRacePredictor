@@ -36,6 +36,7 @@ import pandas as pd
 import numpy as np
 import argparse
 import configparser
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from collections import defaultdict
@@ -178,6 +179,10 @@ class IncrementalEncoder:
                     horse_avg_or_90d REAL,
                     horse_or_trend_direction INTEGER,
                     horse_or_sample_size INTEGER,
+                    horse_rating_vs_field_avg REAL,
+                    horse_avg_vs_field_avg REAL,
+                    horse_rating_percentile REAL,
+                    stronger_horses_count INTEGER,
                     
                     -- Jockey features
                     jockey_id INTEGER,
@@ -358,7 +363,7 @@ class IncrementalEncoder:
             # Load all historical race data up to the date (exclusive)
             query = """
             SELECT horse_id, jockey_id, trainer_id, course, going, dist_f, type, 
-                   pos, date, race_id
+                   pos, date, race_id, or_rating
             FROM race_data 
             WHERE date < ? 
             ORDER BY date, race_id
@@ -388,7 +393,8 @@ class IncrementalEncoder:
                 'dist_f': row['dist_f'],
                 'type': row['type'],
                 'win': win,
-                'date': row['date']
+                'date': row['date'],
+                'or_rating': row.get('or_rating')
             })
             
             # Build jockey history
@@ -442,9 +448,14 @@ class IncrementalEncoder:
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would encode {len(df)} records for {date_str}")
             # Still simulate the encoding process without saving
-            for _, row in df.iterrows():
-                # Just simulate the encoding without saving
-                features = self._encode_single_record(row)
+            for race_id in df['race_id'].unique():
+                race_df = df[df['race_id'] == race_id]
+                # Collect field ratings for this race
+                field_ratings = self._collect_field_ratings(race_df, date_str)
+                
+                for _, row in race_df.iterrows():
+                    # Just simulate the encoding without saving
+                    features = self._encode_single_record(row, field_ratings)
             
             # Update historical context with this day's results
             self._update_historical_context(df)
@@ -453,9 +464,17 @@ class IncrementalEncoder:
         # Encode features for all races on this date
         encoded_features = []
         
-        for _, row in df.iterrows():
-            features = self._encode_single_record(row)
-            encoded_features.append(features)
+        # Process each race separately to calculate field ratings
+        for race_id in df['race_id'].unique():
+            race_df = df[df['race_id'] == race_id]
+            
+            # Collect field ratings for this race (historical ratings for all horses)
+            field_ratings = self._collect_field_ratings(race_df, date_str)
+            
+            # Encode each horse in this race
+            for _, row in race_df.iterrows():
+                features = self._encode_single_record(row, field_ratings)
+                encoded_features.append(features)
         
         # Save encoded features to database
         if encoded_features:
@@ -470,7 +489,7 @@ class IncrementalEncoder:
         self.logger.info(f"✓ Encoded {len(encoded_features)} records for {date_str}")
         return len(encoded_features)
 
-    def _encode_single_record(self, row) -> Dict:
+    def _encode_single_record(self, row, field_ratings: List[int] = None) -> Dict:
         """Encode features for a single race record."""
         horse_id = row['horse_id']
         jockey_id = row['jockey_id']
@@ -555,11 +574,63 @@ class IncrementalEncoder:
         features.update(self._calculate_horse_stats(horse_records, course, going, dist_f, race_date))
         features.update(self._calculate_jockey_stats(jockey_records, course, going, dist_f, race_type, race_date))
         features.update(self._calculate_trainer_stats(trainer_records, course, going, dist_f, race_type, race_date))
-        features.update(self._calculate_horse_rating_features(horse_records, race_date))
+        features.update(self._calculate_horse_rating_features(horse_records, race_date, field_ratings))
         
         return features
 
-    def _calculate_horse_rating_features(self, records: List[Dict], race_date: str) -> Dict:
+    def _collect_field_ratings(self, race_df: pd.DataFrame, race_date: str) -> Dict[str, List[float]]:
+        """Collect historical ratings for all horses in a race to calculate field strength.
+        
+        Returns dict with:
+        - 'last_ratings': List of last OR ratings for horses that have them
+        - 'avg_90d_ratings': List of 90-day average ratings for horses that have them
+        """
+        last_ratings = []
+        avg_90d_ratings = []
+        
+        for _, row in race_df.iterrows():
+            horse_id = row['horse_id']
+            
+            # Get historical records for this horse (excluding current race date)
+            horse_records = [r for r in self.horse_history[horse_id] if r['date'] < race_date]
+            
+            # Filter to records with valid ratings
+            rating_records = [
+                r for r in horse_records 
+                if r.get('or_rating') is not None 
+                and r['or_rating'] != -1 
+                and str(r['or_rating']).isdigit()
+            ]
+            
+            if rating_records:
+                # Sort by date (most recent first)
+                sorted_records = sorted(rating_records, key=lambda x: x['date'], reverse=True)
+                
+                # Last OR rating (always available if rating_records exists)
+                last_rating = int(sorted_records[0]['or_rating'])
+                last_ratings.append(float(last_rating))
+                
+                # 90-day average (only if we have recent data)
+                race_date_dt = pd.to_datetime(race_date)
+                recent_records = [
+                    r for r in sorted_records 
+                    if (race_date_dt - pd.to_datetime(r['date'])).days <= 90
+                ]
+                
+                if recent_records:
+                    # Calculate 90-day average
+                    ratings = [int(r['or_rating']) for r in recent_records]
+                    avg_rating = sum(ratings) / len(ratings)
+                    avg_90d_ratings.append(avg_rating)
+                # Note: If no 90-day data, we don't add anything to avg_90d_ratings
+                # This horse will be excluded from 90-day field average calculation
+        
+        return {
+            'last_ratings': last_ratings,
+            'avg_90d_ratings': avg_90d_ratings
+        }
+
+    def _calculate_horse_rating_features(self, records: List[Dict], race_date: str, field_ratings: Dict[str, List[float]] = None) -> Dict:
         """Calculate horse rating trend features from historical races."""
         # Filter to only races BEFORE current race date (no same-day races)
         race_date_dt = pd.to_datetime(race_date)
@@ -568,21 +639,42 @@ class IncrementalEncoder:
             if pd.to_datetime(r['date']) < race_date_dt 
             and r.get('or_rating') is not None 
             and r['or_rating'] != -1
+            and str(r['or_rating']).isdigit()
         ]
         
         if not prior_records:
-            return {
-                'horse_last_or_rating': -1,
-                'horse_avg_or_90d': -1.0,
+            base_features = {
+                'horse_last_or_rating': 0,
+                'horse_avg_or_90d': 0.0,
                 'horse_or_trend_direction': 0,
                 'horse_or_sample_size': 0
             }
+            
+            # Add race-contextual features (all zeros for horses with no rating history)
+            if field_ratings:
+                last_field_ratings = field_ratings.get('last_ratings', [])
+                stronger_horses = len(last_field_ratings) if last_field_ratings else 0
+                base_features.update({
+                    'horse_rating_vs_field_avg': 0.0,
+                    'horse_avg_vs_field_avg': 0.0,
+                    'horse_rating_percentile': 0.0,
+                    'stronger_horses_count': stronger_horses
+                })
+            else:
+                base_features.update({
+                    'horse_rating_vs_field_avg': 0.0,
+                    'horse_avg_vs_field_avg': 0.0,
+                    'horse_rating_percentile': 0.0,
+                    'stronger_horses_count': 0
+                })
+            
+            return base_features
         
         # Sort by date (most recent first)
         sorted_records = sorted(prior_records, key=lambda x: x['date'], reverse=True)
         
-        # Most recent rating
-        last_or = sorted_records[0]['or_rating']
+        # Most recent rating (convert to int)
+        last_or = int(sorted_records[0]['or_rating'])
         
         # 90-day window for recent form
         recent_records = [
@@ -591,16 +683,16 @@ class IncrementalEncoder:
         ]
         
         if len(recent_records) == 0:
-            avg_90d = -1.0
+            avg_90d = 0.0
             trend_direction = 0
             sample_size = 0
         elif len(recent_records) == 1:
-            avg_90d = float(recent_records[0]['or_rating'])
+            avg_90d = float(int(recent_records[0]['or_rating']))
             trend_direction = 0  # Can't determine trend with 1 race
             sample_size = 1
         else:
-            # Multiple races available
-            ratings = [r['or_rating'] for r in recent_records]
+            # Multiple races available (convert to int)
+            ratings = [int(r['or_rating']) for r in recent_records]
             avg_90d = sum(ratings) / len(ratings)
             
             # Trend: compare most recent vs older average
@@ -618,12 +710,58 @@ class IncrementalEncoder:
             
             sample_size = len(recent_records)
         
-        return {
+        base_features = {
             'horse_last_or_rating': last_or,
             'horse_avg_or_90d': avg_90d,
             'horse_or_trend_direction': trend_direction,
             'horse_or_sample_size': sample_size
         }
+        
+        # Add race-contextual features if field ratings are provided
+        if field_ratings:
+            # Calculate field averages separately for each rating type
+            last_field_ratings = field_ratings.get('last_ratings', [])
+            avg_90d_field_ratings = field_ratings.get('avg_90d_ratings', [])
+            
+            # Feature 1: Last OR rating vs field average of last OR ratings (apples to apples)
+            if last_field_ratings and last_or > 0:
+                last_field_avg = sum(last_field_ratings) / len(last_field_ratings)
+                last_or_vs_field = last_or - last_field_avg
+                
+                # Calculate percentile using last OR rating against other last OR ratings
+                weaker_count = sum(1 for r in last_field_ratings if last_or > r)
+                percentile = (weaker_count / len(last_field_ratings)) * 100
+                
+                # Count of horses with higher last OR ratings
+                stronger_horses = sum(1 for r in last_field_ratings if r > last_or)
+            else:
+                last_or_vs_field = 0.0
+                percentile = 0.0
+                stronger_horses = len(last_field_ratings) if last_field_ratings else 0
+            
+            # Feature 2: 90-day average vs field average of 90-day averages (apples to apples)
+            if avg_90d_field_ratings and avg_90d > 0:
+                avg_90d_field_avg = sum(avg_90d_field_ratings) / len(avg_90d_field_ratings)
+                avg_90d_vs_field = avg_90d - avg_90d_field_avg
+            else:
+                avg_90d_vs_field = 0.0
+            
+            base_features.update({
+                'horse_rating_vs_field_avg': last_or_vs_field,
+                'horse_avg_vs_field_avg': avg_90d_vs_field,
+                'horse_rating_percentile': percentile,
+                'stronger_horses_count': stronger_horses
+            })
+        else:
+            # No field ratings provided (shouldn't happen in normal encoding)
+            base_features.update({
+                'horse_rating_vs_field_avg': 0.0,
+                'horse_avg_vs_field_avg': 0.0,
+                'horse_rating_percentile': 0.0,
+                'stronger_horses_count': 0
+            })
+        
+        return base_features
 
     def _calculate_horse_stats(self, records: List[Dict], course: str, going: str, dist_f: str, race_date: str) -> Dict:
         """Calculate horse historical statistics."""
@@ -874,7 +1012,6 @@ class IncrementalEncoder:
         class_str = str(class_value).strip()
         
         # Extract number from class string (e.g., "Class 4" -> 4, "3" -> 3)
-        import re
         match = re.search(r'(\d+)', class_str)
         if match:
             return int(match.group(1))
@@ -906,7 +1043,6 @@ class IncrementalEncoder:
         
         # Handle "3yo+" format (means 3 or above)
         if '+' in age_str:
-            import re
             match = re.search(r'(\d+)', age_str)
             if match:
                 min_age = int(match.group(1))
@@ -914,7 +1050,6 @@ class IncrementalEncoder:
         
         # Handle range format like "3-5yo"
         if '-' in age_str:
-            import re
             match = re.search(r'(\d+)-(\d+)', age_str)
             if match:
                 min_age = int(match.group(1))
@@ -922,7 +1057,6 @@ class IncrementalEncoder:
                 return min_age, max_age
         
         # Handle single age like "3yo"
-        import re
         match = re.search(r'(\d+)', age_str)
         if match:
             age = int(match.group(1))
@@ -944,7 +1078,8 @@ class IncrementalEncoder:
                 'dist_f': row['dist_f'],
                 'type': row['type'],
                 'win': win,
-                'date': row['date']
+                'date': row['date'],
+                'or_rating': row.get('or_rating')
             }
             
             self.horse_history[horse_id].append(record)
