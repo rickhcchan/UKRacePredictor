@@ -1,7 +1,7 @@
 {
   "model_name": "default",
   "target_column": "target_win",
-  "description": "Default win prediction model (1st place only) - optimized feature set with rating trends",
+  "description": "Default win prediction model (1st place only) - optimized feature set with corrected database column names",
   "features": {
     "categorical": [
       "course_id",
@@ -11,7 +11,7 @@
       "dam_id",
       "damsire_id",
       "hg",
-      "sex_rest",
+      "sex_rest_id",
       "horse_or_trend_direction"
     ],
     "ordinal": [
@@ -22,10 +22,10 @@
       "dist_f",
       "ran",
       "draw",
-      "rating_upper",
-      "age_min",
-      "age_max",
-      "class_number",
+      "max_rating",
+      "min_age",
+      "max_age",
+      "class_num",
       "horse_total_runs",
       "horse_win_pct",
       "horse_course_runs",
