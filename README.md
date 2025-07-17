@@ -99,6 +99,41 @@ graph LR
 
 All scripts support `--dry-run` for testing and use minimal, essential parameters for clean operation.
 
+## 🎯 Enhanced Output Formats (NEW)
+
+The prediction system now generates three complementary output formats:
+
+### 📺 Console Output
+- **Interactive display** with betting recommendations
+- **Strategy-based filtering** shows only recommended horses
+- **Live odds integration** (with `--odds` flag)
+- **Multi-model indicators** (✓/✗) for individual model thresholds
+
+### 📊 CSV Output (`predictions_YYYY-MM-DD_[multi_]models.csv`)
+- **Simplified format**: `course, time, horse_name, model_probabilities`
+- **Decimal probabilities** (0.0-1.0) for easy percentage formatting
+- **All horses included** from all races for complete analysis
+- **Individual model columns** for detailed model comparison
+
+### 🌐 HTML Output (`predictions_YYYY-MM-DD_[multi_]models.html`)
+- **Responsive web format** optimized for mobile and desktop
+- **Strategy-based highlighting**: Green rows for recommended horses
+- **Tick/cross indicators** (✓/✗) for individual model thresholds on recommended rows
+- **Race-by-race display** sorted by time
+- **Mobile-optimized**: Larger fonts and touch-friendly spacing
+- **Desktop-optimized**: Max-width container for ultra-wide monitors
+
+### Example Usage
+```bash
+# Generates all three output formats
+python scripts/predict_races.py --model win*,top3 --odds
+
+# Output files:
+# - Console: Interactive recommendations with live odds
+# - data/prediction/predictions_2025-07-17_multi_win_win_v2_win_v3_top3.csv
+# - data/prediction/predictions_2025-07-17_multi_win_win_v2_win_v3_top3.html
+```
+
 ## 🔄 Usage Guide
 
 ### 1. Initial Setup (First Time Only)
@@ -127,12 +162,14 @@ python scripts/encode_incremental.py
 python scripts/prepare_racecard.py                    # Today
 python scripts/prepare_racecard.py --date 2025-07-12  # Tomorrow
 
-# Step 4: Generate predictions (uses default model and strategy)
-python scripts/predict_races.py                       # Today
-python scripts/predict_races.py --date 2025-07-12     # Tomorrow
+# Step 4: Generate predictions (NEW: Enhanced multi-model support)
+python scripts/predict_races.py                       # Today, default model
+python scripts/predict_races.py --date 2025-07-12     # Tomorrow, default model
+python scripts/predict_races.py --model win*          # Today, all win models
+python scripts/predict_races.py --model win,top3 --odds  # Multiple models with live odds
 ```
 
-### 3. Use Custom Models
+### 3. Advanced Multi-Model Usage (NEW)
 
 ```bash
 # Retrain default model with new data
@@ -142,9 +179,16 @@ python scripts/train.py
 python scripts/train.py --model v1
 python scripts/train.py --model experimental
 
-# Use custom models
-python scripts/train.py --model my_model
-python scripts/predict_races.py --model my_model
+# Use wildcard model selection
+python scripts/predict_races.py --model win*           # All win models
+python scripts/predict_races.py --model top3*,default  # All top3 models + default
+
+# Multi-model combinations
+python scripts/predict_races.py --model win,top3,default
+python scripts/predict_races.py --model win_v2,top3_v3 --strategy default
+
+# With live odds and specific date
+python scripts/predict_races.py --model win* --odds --date 2025-07-12
 ```
 
 ## 📋 Script Reference
@@ -208,47 +252,59 @@ python scripts/prepare_racecard.py --date 2025-07-12 --dry-run
 ```
 
 ### `predict_races.py`
-Generates win probability predictions for prepared racecards using JSON model configurations.
+**ENHANCED**: Race prediction with advanced multi-model support, wildcard selection, and dual output formats.
 
+#### Single Model Usage
 ```bash
 # Predict with default model and default strategy
 python scripts/predict_races.py
 
 # Predict with specific model
-python scripts/predict_races.py --model custom
+python scripts/predict_races.py --model win_v2
 
 # Test run without saving files
 python scripts/predict_races.py --dry-run
 
-# Predict with specific strategy
-python scripts/predict_races.py --strategy default
-
-# Predict with both custom model and strategy
-python scripts/predict_races.py --model custom --strategy default
-
 # Predict specific date
 python scripts/predict_races.py --date 2025-07-08
+```
+
+#### Multi-Model Usage (NEW)
+```bash
+# Multiple specific models
+python scripts/predict_races.py --model win,top3,default
+
+# Wildcard model selection (NEW)
+python scripts/predict_races.py --model win*              # All models starting with "win"
+python scripts/predict_races.py --model top3*,win_v2      # Mix wildcards and specific models
 
 # Combined options
-python scripts/predict_races.py --date 2025-07-08 --model custom --strategy default --dry-run
+python scripts/predict_races.py --model win* --strategy default --date 2025-07-08
 ```
 
-### `predict_races_multi.py`
-**NEW**: Multi-model race prediction with union logic and model agreement indicators.
-
+#### Advanced Features
 ```bash
-# Predict with multiple models
-python scripts/predict_races_multi.py --models win_v2,top3_v2
+# With live odds fetching (requires playwright)
+python scripts/predict_races.py --model win* --odds
 
-# Predict for specific date with custom strategy
-python scripts/predict_races_multi.py --models default,win_v2 --date 2025-07-16 --strategy default
-
-# Test run without saving
-python scripts/predict_races_multi.py --models win_v2,top3_v2 --dry-run
-
-# Custom threshold for display
-python scripts/predict_races_multi.py --models win_v2,top3_v2 --threshold 0.25
+# Custom betting strategy
+python scripts/predict_races.py --model win,top3 --strategy default
 ```
+
+#### Output Formats (NEW)
+- **Console**: Betting recommendations with strategy-based selection
+- **CSV**: Simplified format with `course, time, horse_name, model_probabilities` (decimal format for easy %)
+- **HTML**: Responsive web format with:
+  - Strategy-based row highlighting (green = recommended)
+  - Tick/cross indicators for individual model thresholds
+  - Mobile-optimized with larger fonts
+  - Desktop max-width for ultra-wide monitors
+
+#### Model Selection Logic
+- **Smart validation**: Only includes models with both config files AND trained models
+- **Wildcard expansion**: `win*` finds `win, win_v2, win_v3` etc.
+- **Union strategy**: Uses maximum probability across all selected models
+- **Individual tracking**: Shows each model's contribution to final recommendation
 
 ## 🐎 Live Odds Integration
 
