@@ -37,7 +37,14 @@ cd UKRacePredictor
 pip install -r requirements.txt
 ```
 
-3. Set up configuration (see Configuration section below)
+3. **Optional: Install odds fetching support**
+```bash
+# For live odds integration
+pip install playwright
+playwright install chromium
+```
+
+4. Set up configuration (see Configuration section below)
 
 ## ⚙️ Configuration
 
@@ -242,6 +249,176 @@ python scripts/predict_races_multi.py --models win_v2,top3_v2 --dry-run
 # Custom threshold for display
 python scripts/predict_races_multi.py --models win_v2,top3_v2 --threshold 0.25
 ```
+
+## 🐎 Live Odds Integration
+
+The UK Race Predictor includes live odds fetching from attheraces.com, allowing you to see real-time betting odds alongside your machine learning predictions for enhanced decision making.
+
+### 🎯 Features
+
+- **Live Odds Display**: Shows current odds next to horse predictions
+- **Favoritism Ranking**: Displays rank (e.g., "2/7" for 2nd favorite out of 7 horses)
+- **Intelligent Horse Matching**: Handles name variations between prediction data and odds sources
+- **Sorted Display**: Shows odds in ascending order (favorites first)
+- **Clean UI**: Organized race headers with structured odds presentation
+- **Error Handling**: Graceful fallbacks when odds aren't available
+
+### 📦 Setup
+
+The odds integration is optional and requires playwright:
+
+```bash
+# Install playwright for odds fetching
+pip install playwright
+playwright install chromium
+```
+
+Alternatively, uncomment the line in `requirements.txt`:
+```bash
+# playwright>=1.40.0  # Uncomment this line
+```
+
+### 🚀 Usage
+
+Add the `--odds` flag to any prediction command:
+
+```bash
+# Basic prediction with live odds
+python scripts/predict_races.py --odds
+
+# Specific date with odds
+python scripts/predict_races.py --date 2025-07-17 --odds --dry-run
+
+# Multi-model predictions with odds
+python scripts/predict_races.py --model win,top3 --odds
+
+# Multi-model script with odds
+python scripts/predict_races_multi.py --models win_v2,top3_v2 --odds
+```
+
+### 📊 Sample Output
+
+```
+📍 Leicester - 14:00 (7 horses total)
+
+📊 Live Odds from attheraces.com:
+  🐎 This Guy: 2.75
+  🐎 Eyes Front: 2.75
+  🐎 Sweet Lord: 7
+  🐎 Sioux Perfect: 8
+  🐎 Gascony: 9.5
+  🐎 Renovatio Angel: 13
+  🐎 Booziebrunch: 13
+
+----------------------------------------------------------------------------------------------------
+Horse              | Probability |     Odds |   Rank
+----------------------------------------------------------------------------------------------------
+Sweet Lord         |      21.7% |        7 |    3/7
+Eyes Front         |      19.8% |     2.75 |    1/7
+This Guy           |      18.9% |     2.75 |    1/7
+```
+
+### ⚙️ Course Mapping Configuration
+
+The system automatically maps course names using `config/course_mappings.json`:
+
+```json
+{
+  "newcastle": "Newcastle",
+  "newmarket": "Newmarket", 
+  "chelmsford (aw)": "Chelmsford-City",
+  "epsom": "Epsom-Downs",
+  "kempton (aw)": "Kempton",
+  "chepstow": "Chepstow"
+}
+```
+
+**Adding New Courses:**
+1. Edit `config/course_mappings.json`
+2. Add mapping: `"course_name": "URL-Format-Name"`
+3. Use proper case for URL format (e.g., "Ascot", "Doncaster")
+
+### 💻 Programmatic Usage
+
+```python
+from scripts.odds_fetcher import get_race_odds
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=False)
+    context = browser.new_context()
+    
+    # Fetch odds for a specific race
+    odds = get_race_odds("leicester", "2025-07-17", "14:00", context)
+    print(odds)  # {'This Guy': '2.75', 'Sweet Lord': '7', ...}
+    
+    browser.close()
+```
+
+### 🔧 Horse Name Matching
+
+The system includes intelligent horse name matching:
+
+```python
+from scripts.odds_fetcher import find_best_horse_match
+
+odds_dict = {'This Guy': '2.75', 'Sweet Lord': '7'}
+prediction_name = "Sweet Lord"
+
+matched_horse = find_best_horse_match(prediction_name, odds_dict)
+if matched_horse:
+    odds_value = odds_dict[matched_horse]
+    print(f"{prediction_name}: {odds_value}")
+```
+
+### 🎭 Demo Script
+
+Test the odds fetching functionality:
+
+```bash
+python scripts/demo_odds.py
+```
+
+### 🔍 How It Works
+
+1. **Course Name Normalization**: `"Chelmsford (AW)"` → `"Chelmsford-City"`
+2. **URL Construction**: `https://www.attheraces.com/racecard/{course}/{date}/{time}`
+3. **Horse Matching**: Handles exact, normalized, and partial name matches
+4. **Ranking**: Sorts by odds value and assigns favoritism ranks
+
+### 🛠️ Technical Details
+
+- **Browser**: Uses non-headless Chrome for compatibility
+- **Timeout**: 60s page load, 3s for selectors
+- **Selectors**: `div.odds-grid__row--horse` and `span.odds-value--decimal`
+- **Performance**: ~2-3 seconds per race
+- **Cleanup**: Automatic browser resource management
+
+### 🚨 Troubleshooting
+
+**"Playwright not available"**
+```bash
+pip install playwright
+playwright install chromium
+```
+
+**"No odds found"**
+- Check race time matches exactly
+- Verify course name mapping
+- Ensure race is actually running/available
+
+**Timeout errors**
+- Network connectivity issues
+- Race may not be available yet
+- Server load on attheraces.com
+
+### 📝 Notes
+
+- **Data Source**: attheraces.com (decimal odds)
+- **Update Frequency**: Real-time when fetched
+- **Geographic Scope**: UK racecourses only
+- **Race Types**: Flat and National Hunt
+- **Time Format**: 24-hour format required (e.g., "14:30")
 
 **Multi-Model Features:**
 - **Union Logic**: Shows horses predicted by ANY model (not intersection)

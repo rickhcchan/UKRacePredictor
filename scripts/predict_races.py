@@ -53,6 +53,13 @@ import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List
+try:
+    from playwright.sync_api import sync_playwright
+    from odds_fetcher import get_race_odds, format_horse_with_odds
+    ODDS_AVAILABLE = True
+except ImportError:
+    ODDS_AVAILABLE = False
+    print("⚠️ Playwright not available - odds fetching disabled")
 
 # Suppress specific pandas FutureWarnings about DataFrame concatenation
 warnings.filterwarnings('ignore', category=FutureWarning, message='.*DataFrame concatenation.*')
@@ -64,15 +71,17 @@ sys.path.append(str(script_dir))
 from common import setup_logging, convert_to_24h_time
 from model_config import load_model_config
 from strategy_factory import StrategyFactory
+from odds_fetcher import find_best_horse_match
 
 
 class RacePredictor:
-    def __init__(self, date: str = None, dry_run: bool = False, model_names: List[str] = None, strategy_name: str = "default", threshold: float = 0.20):
+    def __init__(self, date: str = None, dry_run: bool = False, model_names: List[str] = None, strategy_name: str = "default", threshold: float = 0.20, fetch_odds: bool = False):
         self.target_date = date or datetime.now().strftime('%Y-%m-%d')
         self.dry_run = dry_run
         self.model_names = model_names or ["default"]
         self.strategy_name = strategy_name
         self.threshold = threshold
+        self.fetch_odds = fetch_odds and ODDS_AVAILABLE
         self.logger = setup_logging()
         
         # Support backward compatibility - if single model passed as string
@@ -99,11 +108,13 @@ class RacePredictor:
         # Load system configuration
         self.config = self._load_config()
         
-        # Live odds integration removed - sites change too frequently
-        self.live_odds_manager = None
+        # Initialize odds fetching
+        self.odds_context = None
+        if self.fetch_odds:
+            self.logger.info("Odds fetching enabled - will fetch live odds from attheraces.com")
         
-        # Odds display disabled (live odds integration removed)
-        self.show_odds = False
+        # Odds display enabled if odds fetching is available
+        self.show_odds = self.fetch_odds
         
         # Set paths from config
         self.db_path = self._get_config_value('common', 'db_path', 'data/race_data.db')
@@ -161,6 +172,42 @@ class RacePredictor:
             return None
         
         return config
+
+    def _init_odds_context(self):
+        """Initialize browser context for odds fetching"""
+        if not self.fetch_odds or not ODDS_AVAILABLE:
+            return
+        
+        try:
+            self.playwright = sync_playwright().start()
+            browser = self.playwright.chromium.launch(headless=False)  # Use non-headless for compatibility
+            self.odds_context = browser.new_context(viewport={"width": 1280, "height": 2000})
+            self.logger.info("Odds fetching context initialized")
+        except Exception as e:
+            self.logger.warning(f"Failed to initialize odds context: {e}")
+            self.fetch_odds = False
+            self.show_odds = False
+
+    def _cleanup_odds_context(self):
+        """Clean up browser context for odds fetching"""
+        if hasattr(self, 'odds_context') and self.odds_context:
+            try:
+                self.odds_context.browser.close()
+                self.playwright.stop()
+                self.logger.info("Odds fetching context cleaned up")
+            except Exception as e:
+                self.logger.warning(f"Error cleaning up odds context: {e}")
+
+    def _get_race_odds(self, course: str, date: str, time: str) -> dict:
+        """Get odds for a specific race"""
+        if not self.fetch_odds or not self.odds_context:
+            return {}
+        
+        try:
+            return get_race_odds(course, date, time, self.odds_context)
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch odds for {course} {time}: {e}")
+            return {}
 
     def load_models(self) -> bool:
         """Load the trained model(s), calibrator(s), and feature list(s)."""
@@ -512,6 +559,10 @@ class RacePredictor:
         """Format and display prediction results using betting strategy."""
         self.logger.info("Formatting prediction results...")
         
+        # Initialize odds fetching if enabled
+        if self.fetch_odds:
+            self._init_odds_context()
+        
         bet_races = []
         bet_horses = []
         
@@ -618,6 +669,7 @@ class RacePredictor:
         print("=" * header_width)
         
         current_race = None
+        current_race_odds = {}
         for _, horse in bet_horses_df.iterrows():
             race_key = f"{horse.get('course', 'Unknown')} {horse.get('time', 'Unknown')}"
             
@@ -628,7 +680,39 @@ class RacePredictor:
                 # Count total horses in this race
                 total_horses_in_race = len(df[df['race_id'] == horse['race_id']])
                 
+                # Show race header first
                 print(f"\n📍 {horse.get('course', 'Unknown')} - {horse.get('time', 'Unknown')} ({total_horses_in_race} horses total)")
+                
+                # Fetch odds for this race if enabled
+                if self.fetch_odds:
+                    course = horse.get('course', '')
+                    time = horse.get('time', '')
+                    current_race_odds = self._get_race_odds(course, self.target_date, time)
+                    if current_race_odds:
+                        # Sort odds by value (ascending - favorites first)
+                        sorted_odds = []
+                        for horse_name, odds_str in current_race_odds.items():
+                            try:
+                                odds_val = float(odds_str)
+                                sorted_odds.append((horse_name, odds_str, odds_val))
+                            except (ValueError, TypeError):
+                                sorted_odds.append((horse_name, odds_str, float('inf')))
+                        
+                        # Sort by odds value
+                        sorted_odds.sort(key=lambda x: x[2])
+                        
+                        # Display sorted odds
+                        print(f"\n📊 Live Odds from attheraces.com:")
+                        for horse_name, odds_str, _ in sorted_odds:
+                            print(f"  🐎 {horse_name}: {odds_str}")
+                        print()  # Empty line after odds
+                        
+                    # Calculate odds rankings for this race
+                    current_race_rankings = self._calculate_odds_rankings(current_race_odds)
+                else:
+                    current_race_odds = {}
+                    current_race_rankings = {}
+                
                 print("-" * 100)
                 
                 if self.is_multi_model:
@@ -636,10 +720,15 @@ class RacePredictor:
                     header = f"{'Horse':18}"
                     for model_name in self.model_names:
                         header += f" | {model_name[:10]:>12}"
+                    if self.show_odds:
+                        header += f" | {'Odds':>8} | {'Rank':>6}"
                     print(header)
                 else:
                     # Single model header
-                    print(f"{'Horse':18} | {'Probability':>11}")
+                    if self.show_odds:
+                        print(f"{'Horse':18} | {'Probability':>11} | {'Odds':>8} | {'Rank':>6}")
+                    else:
+                        print(f"{'Horse':18} | {'Probability':>11}")
                 
                 print("-" * 100)
                 current_race = race_key
@@ -664,10 +753,27 @@ class RacePredictor:
                     # Format with consistent width: 12 chars total to match header
                     line += f" | {model_prob:7.1f}% {indicator:>2}"
                 
+                # Add odds if available
+                if self.show_odds:
+                    horse_name = horse.get('horse_name', 'Unknown')
+                    # Use improved matching to find odds
+                    matched_horse = find_best_horse_match(horse_name, current_race_odds)
+                    odds_val = current_race_odds.get(matched_horse, 'N/A') if matched_horse else 'N/A'
+                    rank_val = current_race_rankings.get(matched_horse, 'N/A') if matched_horse else 'N/A'
+                    line += f" | {odds_val:>8} | {rank_val:>6}"
+                
                 print(line)
             else:
                 # Single model display
-                print(f"{horse.get('horse_name', 'Unknown'):18} | {calib_prob:9.1f}%")
+                horse_name = horse.get('horse_name', 'Unknown')
+                if self.show_odds:
+                    # Use improved matching to find odds
+                    matched_horse = find_best_horse_match(horse_name, current_race_odds)
+                    odds_val = current_race_odds.get(matched_horse, 'N/A') if matched_horse else 'N/A'
+                    rank_val = current_race_rankings.get(matched_horse, 'N/A') if matched_horse else 'N/A'
+                    print(f"{horse_name:18} | {calib_prob:9.1f}% | {odds_val:>8} | {rank_val:>6}")
+                else:
+                    print(f"{horse_name:18} | {calib_prob:9.1f}%")
         
         # Calculate summary statistics
         total_races = df['race_id'].nunique()
@@ -691,6 +797,10 @@ class RacePredictor:
         if len(bet_horses_df) > 0:
             print(f"Average recommended horse probability: {bet_horses_df['win_probability'].mean()*100:.1f}%")
             print(f"Highest recommended probability: {bet_horses_df['win_probability'].max()*100:.1f}%")
+        
+        # Cleanup odds context if initialized
+        if self.fetch_odds:
+            self._cleanup_odds_context()
 
     def save_predictions(self, df: pd.DataFrame):
         """Save predictions to file."""
@@ -767,6 +877,35 @@ class RacePredictor:
         self.logger.info(f"Race prediction complete for {self.target_date}")
         return True
 
+    def _calculate_odds_rankings(self, current_race_odds):
+        """Calculate favoritism rankings based on odds"""
+        if not current_race_odds:
+            return {}
+        
+        # Convert odds to numeric values for sorting
+        odds_list = []
+        for horse_name, odds_str in current_race_odds.items():
+            try:
+                odds_val = float(odds_str)
+                odds_list.append((horse_name, odds_val))
+            except (ValueError, TypeError):
+                # Handle N/A or invalid odds
+                odds_list.append((horse_name, float('inf')))
+        
+        # Sort by odds (lower odds = higher favorite)
+        odds_list.sort(key=lambda x: x[1])
+        
+        # Create ranking dictionary
+        rankings = {}
+        total_horses = len(odds_list)
+        for rank, (horse_name, _) in enumerate(odds_list, 1):
+            if rank <= total_horses:  # Only rank valid odds
+                rankings[horse_name] = f"{rank}/{total_horses}"
+            else:
+                rankings[horse_name] = "N/A"
+        
+        return rankings
+
 def main():
     parser = argparse.ArgumentParser(description='Predict race winners using prepared racecard')
     parser.add_argument('--date', 
@@ -783,6 +922,9 @@ def main():
                        type=str,
                        default='default',
                        help='Betting strategy to use (default: default)')
+    parser.add_argument('--odds', 
+                       action='store_true',
+                       help='Fetch and display live odds from attheraces.com (requires playwright)')
     
     args = parser.parse_args()
     
@@ -796,11 +938,15 @@ def main():
         else:
             print(f"📊 Single-model mode: Using model: {model_names[0]}")
         
+        if args.odds and not ODDS_AVAILABLE:
+            print("⚠️ Warning: Odds fetching requested but playwright not available. Install with: pip install playwright && playwright install chromium")
+        
         predictor = RacePredictor(
             date=args.date,
             dry_run=args.dry_run,
             model_names=model_names,  # Pass list of model names
-            strategy_name=args.strategy
+            strategy_name=args.strategy,
+            fetch_odds=args.odds
         )
         
         success = predictor.run_prediction()

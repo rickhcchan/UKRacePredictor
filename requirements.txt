@@ -8,3 +8,6 @@ numpy>=1.24.0
 
 # Model Persistence
 joblib>=1.3.0
+
+# Optional: Live Odds Fetching
+# playwright>=1.40.0  # Uncomment to enable odds fetching
