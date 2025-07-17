@@ -50,6 +50,8 @@ import argparse
 import configparser
 import joblib
 import warnings
+import glob
+import fnmatch
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -802,8 +804,278 @@ class RacePredictor:
         if self.fetch_odds:
             self._cleanup_odds_context()
 
+    def _calculate_odds_rankings(self, current_race_odds):
+        """Calculate favoritism rankings based on odds"""
+        if not current_race_odds:
+            return {}
+        
+        # Convert odds to numeric values for sorting
+        odds_list = []
+        for horse_name, odds_str in current_race_odds.items():
+            try:
+                odds_val = float(odds_str)
+                odds_list.append((horse_name, odds_val))
+            except (ValueError, TypeError):
+                # Handle N/A or invalid odds
+                odds_list.append((horse_name, float('inf')))
+        
+        # Sort by odds (lower odds = higher favorite)
+        odds_list.sort(key=lambda x: x[1])
+        
+        # Create ranking dictionary
+        rankings = {}
+        total_horses = len(odds_list)
+        for rank, (horse_name, _) in enumerate(odds_list, 1):
+            if rank <= total_horses:  # Only rank valid odds
+                rankings[horse_name] = f"{rank}/{total_horses}"
+            else:
+                rankings[horse_name] = "N/A"
+        
+        return rankings
+
+    def _generate_html_output(self, df: pd.DataFrame) -> str:
+        """Generate HTML output for predictions"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # First, determine which horses would be selected by the strategy
+        selected_horses_set = set()
+        for race_id, race_group in df.groupby('race_id'):
+            # Convert race group to list of horse dictionaries (same logic as format_and_display_results)
+            horses = []
+            for _, horse_row in race_group.iterrows():
+                horse_dict = {
+                    'horse_id': str(race_id) + "_" + str(horse_row.name),
+                    'horse_name': horse_row.get('horse_name', 'Unknown'),
+                    'calibrated_probability': horse_row.get('win_probability', 0.0),
+                    'jockey': horse_row.get('jockey', 'Unknown'),
+                    'trainer': horse_row.get('trainer', 'Unknown'),
+                    'weight': horse_row.get('lbs', 0),
+                    'draw': horse_row.get('draw', 0),
+                    'age': horse_row.get('age', 0),
+                    'course_name': horse_row.get('course', 'Unknown'),
+                    'race_time': horse_row.get('time', 'Unknown'),
+                    'model_agreement': horse_row.get('model_agreement', 1.0) if self.is_multi_model else 1.0,
+                    'models_agreeing': horse_row.get('models_agreeing', 1) if self.is_multi_model else 1,
+                    **{col: horse_row.get(col) for col in horse_row.index}
+                }
+                horses.append(horse_dict)
+            
+            # Create race data dictionary
+            race_data = {
+                'race_id': race_id,
+                'course_name': race_group.iloc[0].get('course', 'Unknown'),
+                'race_time': race_group.iloc[0].get('time', 'Unknown'),
+                'field_size': len(race_group),
+                'distance': race_group.iloc[0].get('dist_f', 0),
+                **{col: race_group.iloc[0].get(col) for col in ['class_number', 'going_id', 'pattern_id'] if col in race_group.columns}
+            }
+            
+            # Use strategy to select horses
+            selected_horses = self.strategy.select_horses(horses, race_data)
+            for horse in selected_horses:
+                selected_horses_set.add((race_id, horse.get('horse_name', 'Unknown')))
+        
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Race Predictions - {self.target_date}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }}
+        .container {{ max-width: 1200px; margin: 0 auto; }}
+        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }}
+        .race-section {{ background: white; margin: 20px 0; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .race-header {{ font-size: 18px; font-weight: bold; color: #333; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid #eee; }}
+        table {{ width: 100%; border-collapse: collapse; border: 1px solid #ddd; }}
+        th, td {{ padding: 8px 12px; border: 1px solid #ddd; }}
+        th {{ background-color: #f8f9fa; font-weight: bold; color: #555; }}
+        .horse-name {{ font-weight: bold; color: #2c5282; text-align: left; }}
+        .horse-name-selected {{ font-weight: bold; color: #155724; text-align: left; background-color: #d4edda; }}
+        .prob-selected {{ background-color: #d4edda; color: #155724; font-weight: bold; text-align: right; }}
+        .prob-normal {{ color: #6c757d; text-align: right; }}
+        .prob-row-selected {{ background-color: #d4edda; color: #155724; text-align: right; }}
+        .model-col {{ text-align: right; }}
+        .odds-col, .rank-col {{ text-align: right; font-size: 0.9em; }}
+        .footer {{ margin-top: 30px; padding: 15px; background: #f8f9fa; border-radius: 5px; color: #666; font-size: 0.9em; }}
+        
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {{
+            body {{ margin: 10px; font-size: 18px !important; }}
+            .container {{ max-width: 100%; }}
+            .header {{ padding: 15px; }}
+            .header h1 {{ font-size: 28px !important; }}
+            .header p {{ font-size: 18px !important; }}
+            .race-section {{ margin: 15px 0; padding: 12px; }}
+            .race-header {{ font-size: 22px !important; }}
+            table {{ font-size: 18px !important; }}
+            th, td {{ padding: 12px 8px; font-size: 18px !important; }}
+            .horse-name, .horse-name-selected {{ font-size: 18px !important; font-weight: bold; }}
+            .prob-selected, .prob-normal, .prob-row-selected {{ font-size: 18px !important; }}
+        }}
+        
+        /* Large desktop styles */
+        @media (min-width: 1400px) {{
+            .container {{ max-width: 1400px; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏇 UK Race Predictions</h1>
+            <p>Date: {self.target_date} | Models: {', '.join(self.model_names)} | Strategy: {self.strategy.name}</p>
+        </div>
+"""
+        
+        # Group by race and sort by time
+        races = []
+        for race_id in df['race_id'].unique():
+            race_df = df[df['race_id'] == race_id].copy()
+            if not race_df.empty:
+                course = race_df['course'].iloc[0]
+                time = race_df['time'].iloc[0]
+                races.append((race_id, course, time, race_df))
+        
+        # Sort races by time
+        try:
+            from common import convert_to_24h_time
+            races.sort(key=lambda x: convert_to_24h_time(x[2]))
+        except:
+            races.sort(key=lambda x: x[2])  # Fallback to string sort
+        
+        for race_id, course, time, race_df in races:
+            
+            html += f"""
+    <div class="race-section">
+        <div class="race-header">
+            📍 {course} - {time}
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Horse</th>"""
+            
+            # Add probability columns for each model
+            if self.is_multi_model:
+                for model_name in self.model_names:
+                    html += f'<th class="model-col">{model_name[:8]}</th>'
+            else:
+                html += '<th>Probability</th>'
+            
+            # Add odds columns if available
+            if self.show_odds:
+                html += '<th class="odds-col">Odds</th><th class="rank-col">Rank</th>'
+            
+            html += """
+                </tr>
+            </thead>
+            <tbody>
+"""
+            
+            # Sort horses by probability
+            if self.is_multi_model:
+                sort_col = 'win_probability_normalized'
+            else:
+                sort_col = 'win_probability_normalized'
+            
+            race_df = race_df.sort_values(sort_col, ascending=False)
+            
+            # Add horse rows
+            for _, horse in race_df.iterrows():
+                html += '<tr>'
+                
+                # Check if this horse is selected by strategy (for any model)
+                horse_selected_by_any_model = (race_id, horse["horse_name"]) in selected_horses_set
+                
+                # Horse name cell - highlighted if any model selects this horse
+                horse_name_class = "horse-name-selected" if horse_selected_by_any_model else "horse-name"
+                html += f'<td class="{horse_name_class}">{horse["horse_name"]}</td>'
+                
+                if self.is_multi_model:
+                    # Individual model probabilities
+                    for model_name in self.model_names:
+                        prob_col = f'win_probability_{model_name}'
+                        if prob_col in horse:
+                            prob = horse[prob_col] * 100
+                            
+                            if horse_selected_by_any_model:
+                                # For highlighted rows, show tick/cross and use selected styling
+                                # Check if THIS specific model would select this horse
+                                individual_horse_data = {
+                                    'horse_name': horse["horse_name"],
+                                    'calibrated_probability': horse[prob_col],
+                                    **{col: horse.get(col) for col in horse.index}
+                                }
+                                
+                                # Simple threshold check for individual model (20% for default strategy)
+                                model_selects = horse[prob_col] >= 0.20  # Using 20% threshold
+                                indicator = " ✓" if model_selects else " ✗"
+                                
+                                html += f'<td class="prob-row-selected">{prob:.1f}%{indicator}</td>'
+                            else:
+                                # Normal row, no indicators
+                                html += f'<td class="prob-normal">{prob:.1f}%</td>'
+                        else:
+                            html += '<td>N/A</td>'
+                else:
+                    # Single model probability
+                    prob = horse[sort_col] * 100
+                    if horse_selected_by_any_model:
+                        html += f'<td class="prob-row-selected">{prob:.1f}% ✓</td>'
+                    else:
+                        html += f'<td class="prob-normal">{prob:.1f}%</td>'
+                
+                # Odds columns (placeholder for now)
+                if self.show_odds:
+                    html += '<td class="odds-col">N/A</td><td class="rank-col">N/A</td>'
+                
+                html += '</tr>'
+            
+            html += """
+            </tbody>
+        </table>
+    </div>"""
+        
+        # Footer
+        html += f"""
+    <div class="footer">
+        <p>Generated by UK Race Predictor | Models: {', '.join(self.model_names)} | Strategy: {self.strategy.name}</p>
+        <p>Timestamp: {timestamp}</p>
+    </div>
+    </div>
+</body>
+</html>"""
+        
+        return html
+
+    def save_html_predictions(self, df: pd.DataFrame):
+        """Save predictions to HTML format"""
+        # Create filename based on single or multi-model mode
+        if self.is_multi_model:
+            model_suffix = "_".join(self.model_names)
+            output_file = self.prediction_dir / f"predictions_{self.target_date}_multi_{model_suffix}.html"
+        else:
+            output_file = self.prediction_dir / f"predictions_{self.target_date}_{self.model_name}.html"
+        
+        if self.dry_run:
+            self.logger.info(f"[DRY RUN] Would save HTML predictions to: {output_file}")
+            return
+        
+        # Generate HTML content
+        html_content = self._generate_html_output(df)
+        
+        # Save to file
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        self.logger.info(f"✓ Saved HTML predictions to: {output_file}")
+
     def save_predictions(self, df: pd.DataFrame):
-        """Save predictions to file."""
+        """Save predictions to file in both CSV and HTML formats."""
+        # Save HTML format (always generated)
+        self.save_html_predictions(df)
+        
         # Create filename based on single or multi-model mode
         if self.is_multi_model:
             model_suffix = "_".join(self.model_names)
@@ -815,32 +1087,25 @@ class RacePredictor:
             self.logger.info(f"[DRY RUN] Would save {len(df)} predictions to: {output_file}")
             return
         
-        # Select key columns for output
-        output_columns = [
-            'race_id', 'horse_id', 'horse_name', 'course', 'time',
-            'win_probability', 'win_probability_normalized', 'base_probability'
-        ]
+        # Create simplified CSV with only essential columns
+        output_columns = ['course', 'time', 'horse_name']
         
-        # Add multi-model specific columns
-        if self.is_multi_model:
-            output_columns.extend(['model_agreement', 'models_agreeing'])
-            # Add individual model predictions
-            for model_name in self.model_names:
-                base_col = f'base_probability_{model_name}'
-                win_col = f'win_probability_{model_name}'
-                if base_col in df.columns:
-                    output_columns.append(base_col)
-                if win_col in df.columns:
-                    output_columns.append(win_col)
+        # Add probability columns for each model (calibrated percentages)
+        for model_name in self.model_names:
+            prob_col = f'win_probability_{model_name}'
+            if prob_col in df.columns:
+                output_columns.append(prob_col)
         
-        # Add additional columns if they exist
-        for col in ['age', 'draw', 'lbs', 'jockey_id', 'trainer_id']:
-            if col in df.columns:
-                output_columns.append(col)
+        # If single model, also include the normalized probability
+        if not self.is_multi_model and 'win_probability_normalized' in df.columns:
+            output_columns.append('win_probability_normalized')
         
         # Filter columns that actually exist in the dataframe
         existing_columns = [col for col in output_columns if col in df.columns]
         output_df = df[existing_columns].copy()
+        
+        # Keep probabilities as 0.0-1.0 base for easy percentage formatting
+        # No conversion needed - probabilities stay as decimal values
         
         output_df.to_csv(output_file, index=False)
         self.logger.info(f"✓ Saved {len(output_df)} predictions to: {output_file}")
@@ -906,6 +1171,74 @@ class RacePredictor:
         
         return rankings
 
+def expand_model_wildcards(model_patterns, models_dir):
+    """Expand wildcard patterns to actual model names that have both config and model files"""
+    models_path = Path(models_dir)
+    config_dir = Path(__file__).parent.parent / "config" / "models"
+    
+    # Get all model directories that exist
+    available_model_dirs = []
+    if models_path.exists():
+        available_model_dirs = [d.name for d in models_path.iterdir() if d.is_dir()]
+    
+    # Get all config files that exist
+    available_configs = []
+    if config_dir.exists():
+        available_configs = [f.stem for f in config_dir.glob("*.json")]
+    
+    # Find models that have BOTH directory and config
+    valid_models = []
+    for model_name in available_model_dirs:
+        if model_name in available_configs:
+            # Check if model files exist
+            model_dir = models_path / model_name
+            has_model_file = (
+                (model_dir / "lightgbm_model.pkl").exists() or
+                (model_dir / f"lightgbm_model_{model_name}.pkl").exists() or
+                (model_dir / "lightgbm_model_clean.pkl").exists()
+            )
+            has_calibrator = (
+                (model_dir / "probability_calibrator.pkl").exists() or
+                (model_dir / f"probability_calibrator_{model_name}.pkl").exists()
+            )
+            
+            if has_model_file and has_calibrator:
+                valid_models.append(model_name)
+            else:
+                print(f"⚠️ Skipping {model_name}: Missing model files (has_model: {has_model_file}, has_calibrator: {has_calibrator})")
+        else:
+            print(f"⚠️ Skipping {model_name}: No config file found")
+    
+    print(f"📁 Found {len(valid_models)} valid models: {valid_models}")
+    
+    expanded_models = []
+    for pattern in model_patterns:
+        if '*' in pattern:
+            # Handle wildcard patterns
+            matches = fnmatch.filter(valid_models, pattern)
+            if matches:
+                expanded_models.extend(sorted(matches))
+                print(f"✓ Pattern '{pattern}' matched: {matches}")
+            else:
+                print(f"⚠️ Warning: No valid models found matching pattern '{pattern}'")
+        else:
+            # Exact model name
+            if pattern in valid_models:
+                expanded_models.append(pattern)
+                print(f"✓ Exact model '{pattern}' found")
+            else:
+                print(f"⚠️ Warning: Model '{pattern}' not found in valid models: {valid_models}")
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_models = []
+    for model in expanded_models:
+        if model not in seen:
+            seen.add(model)
+            unique_models.append(model)
+    
+    return unique_models
+
 def main():
     parser = argparse.ArgumentParser(description='Predict race winners using prepared racecard')
     parser.add_argument('--date', 
@@ -929,8 +1262,14 @@ def main():
     args = parser.parse_args()
     
     try:
-        # Parse comma-separated model names
-        model_names = [name.strip() for name in args.model.split(',') if name.strip()]
+        # Parse comma-separated model names and expand wildcards
+        model_patterns = [name.strip() for name in args.model.split(',') if name.strip()]
+        models_dir = Path(__file__).parent.parent / "models"
+        model_names = expand_model_wildcards(model_patterns, models_dir)
+        
+        if not model_names:
+            print(f"❌ Error: No valid models found for patterns: {model_patterns}")
+            sys.exit(1)
         
         # Log the mode being used
         if len(model_names) > 1:
