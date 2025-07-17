@@ -457,7 +457,7 @@ class IncrementalEncoder:
         
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would encode {len(df)} records for {date_str}")
-            # Still simulate the encoding process without saving
+            # Still simulate the encoding process without saving but with incremental context updates
             for race_id in df['race_id'].unique():
                 race_df = df[df['race_id'] == race_id]
                 # Collect field ratings for this race
@@ -466,9 +466,9 @@ class IncrementalEncoder:
                 for _, row in race_df.iterrows():
                     # Just simulate the encoding without saving
                     features = self._encode_single_record(row, field_ratings)
+                    # Update context incrementally for accurate same-day stats
+                    self._update_single_race_context(row)
             
-            # Update historical context with this day's results
-            self._update_historical_context(df)
             return len(df)
         
         # Encode features for all races on this date
@@ -888,12 +888,19 @@ class IncrementalEncoder:
         runs = len(same_day_earlier_races)
         wins = sum(1 for r in same_day_earlier_races if r['win'])
         
-        # Calculate average finish position (only for races where position is valid)
+        # Calculate average finish position (treat non-finishers as finishing last)
         positions = []
         for r in same_day_earlier_races:
             pos = r.get('pos')
+            ran = r.get('ran', 0)  # Number of horses that ran in the race
+            
             if pos is not None and str(pos).isdigit():
+                # Normal finishing position
                 positions.append(int(pos))
+            elif pos is not None and ran > 0:
+                # Non-finisher (PU, F, UR, etc.) - treat as finishing last
+                positions.append(ran)
+            # If we can't determine position or field size, skip this race
         
         avg_finish = sum(positions) / len(positions) if positions else -1.0
         
