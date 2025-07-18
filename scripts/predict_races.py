@@ -713,6 +713,7 @@ class RacePredictor:
             
             # Add model-specific probabilities if in multi-model mode
             if self.is_multi_model:
+                horse_row['model_selections'] = horse.get('model_selections', {})  # Add model selections data
                 for model_name in self.model_names:
                     prob_col = f'win_probability_{model_name}'
                     if prob_col in df.columns:
@@ -1038,13 +1039,11 @@ class RacePredictor:
             <tbody>
 """
             
-            # Sort horses by probability (use normalized for sorting, but display calibrated)
+            # Sort horses by calibrated probability (ensemble probability for multi-model)
             if self.is_multi_model:
-                sort_col = 'win_probability_normalized'
-                display_col = 'win_probability'  # Display calibrated probabilities
+                sort_col = 'win_probability'  # Use ensemble (union) probability for sorting
             else:
-                sort_col = 'win_probability_normalized'
-                display_col = 'win_probability'  # Display calibrated probabilities
+                sort_col = 'win_probability'  # Use calibrated probability for sorting
             
             race_df = race_df.sort_values(sort_col, ascending=False)
             
@@ -1086,13 +1085,8 @@ class RacePredictor:
                         else:
                             html += '<td>N/A</td>'
                 else:
-                    # Single model probability - use display_col for showing probabilities
-                    if display_col == 'win_probability_normalized':
-                        # Normalized probabilities are already in percentage format (0-100)
-                        prob = horse[display_col]
-                    else:
-                        # Regular calibrated probabilities need to be converted to percentages
-                        prob = horse[display_col] * 100
+                    # Single model probability - always use calibrated probability
+                    prob = horse['win_probability'] * 100  # Convert calibrated probability to percentage
                     
                     if horse_selected_by_any_model:
                         html += f'<td class="prob-row-selected">{prob:.1f}% ✓</td>'
@@ -1163,15 +1157,17 @@ class RacePredictor:
         # Create simplified CSV with only essential columns
         output_columns = ['course', 'time', 'horse_name']
         
-        # Add probability columns for each model (calibrated percentages)
+        # Add probability columns for each model (calibrated probabilities)
         for model_name in self.model_names:
             prob_col = f'win_probability_{model_name}'
             if prob_col in df.columns:
                 output_columns.append(prob_col)
         
-        # If single model, also include the normalized probability
-        if not self.is_multi_model and 'win_probability_normalized' in df.columns:
-            output_columns.append('win_probability_normalized')
+        # For multi-model, also include the ensemble probability
+        if self.is_multi_model and 'win_probability' in df.columns:
+            output_columns.append('win_probability')  # Ensemble probability
+        elif not self.is_multi_model and 'win_probability' in df.columns:
+            output_columns.append('win_probability')  # Single model probability
         
         # Filter columns that actually exist in the dataframe
         existing_columns = [col for col in output_columns if col in df.columns]
@@ -1203,14 +1199,11 @@ class RacePredictor:
         # Make predictions
         df_with_predictions = self.make_predictions(df)
         
-        # Normalize probabilities within races
-        df_normalized = self.normalize_race_probabilities(df_with_predictions)
-        
-        # Display results
-        self.format_and_display_results(df_normalized)
+        # Display results (using calibrated probabilities directly)
+        self.format_and_display_results(df_with_predictions)
         
         # Save predictions
-        self.save_predictions(df_normalized)
+        self.save_predictions(df_with_predictions)
         
         self.logger.info(f"Race prediction complete for {self.target_date}")
         return True
@@ -1282,7 +1275,7 @@ def expand_model_wildcards(model_patterns, models_dir):
         else:
             print(f"⚠️ Skipping {model_name}: No config file found")
     
-    print(f"📁 Found {len(valid_models)} valid models: {valid_models}")
+    print(f"Found {len(valid_models)} valid models: {valid_models}")
     
     expanded_models = []
     for pattern in model_patterns:
