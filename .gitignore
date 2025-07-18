@@ -19,3 +19,7 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Ignore model configs
+config/models/*.json
+!config/models/default.json
