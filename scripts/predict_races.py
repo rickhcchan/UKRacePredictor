@@ -973,11 +973,13 @@ class RacePredictor:
             <tbody>
 """
             
-            # Sort horses by probability
+            # Sort horses by probability (use normalized for sorting, but display calibrated)
             if self.is_multi_model:
                 sort_col = 'win_probability_normalized'
+                display_col = 'win_probability'  # Display calibrated probabilities
             else:
                 sort_col = 'win_probability_normalized'
+                display_col = 'win_probability'  # Display calibrated probabilities
             
             race_df = race_df.sort_values(sort_col, ascending=False)
             
@@ -1019,8 +1021,14 @@ class RacePredictor:
                         else:
                             html += '<td>N/A</td>'
                 else:
-                    # Single model probability
-                    prob = horse[sort_col] * 100
+                    # Single model probability - use display_col for showing probabilities
+                    if display_col == 'win_probability_normalized':
+                        # Normalized probabilities are already in percentage format (0-100)
+                        prob = horse[display_col]
+                    else:
+                        # Regular calibrated probabilities need to be converted to percentages
+                        prob = horse[display_col] * 100
+                    
                     if horse_selected_by_any_model:
                         html += f'<td class="prob-row-selected">{prob:.1f}% ✓</td>'
                     else:
