@@ -570,28 +570,6 @@ class RacePredictor:
         
         # Process each race using the betting strategy
         for race_id, race_group in df.groupby('race_id'):
-            # Convert race group to list of horse dictionaries
-            horses = []
-            for _, horse_row in race_group.iterrows():
-                horse_dict = {
-                    'horse_id': str(race_id) + "_" + str(horse_row.name),  # Create unique ID
-                    'horse_name': horse_row.get('horse_name', 'Unknown'),  # Fixed: use horse_name column
-                    'calibrated_probability': horse_row.get('win_probability', 0.0),
-                    'jockey': horse_row.get('jockey', 'Unknown'),
-                    'trainer': horse_row.get('trainer', 'Unknown'),
-                    'weight': horse_row.get('lbs', 0),
-                    'draw': horse_row.get('draw', 0),
-                    'age': horse_row.get('age', 0),
-                    'course_name': horse_row.get('course', 'Unknown'),  # Add course for strategy use
-                    'race_time': horse_row.get('time', 'Unknown'),      # Add time for strategy use
-                    # Add multi-model specific data
-                    'model_agreement': horse_row.get('model_agreement', 1.0) if self.is_multi_model else 1.0,
-                    'models_agreeing': horse_row.get('models_agreeing', 1) if self.is_multi_model else 1,
-                    # Add all other columns
-                    **{col: horse_row.get(col) for col in horse_row.index}
-                }
-                horses.append(horse_dict)
-            
             # Create race data dictionary
             race_data = {
                 'race_id': race_id,
@@ -603,12 +581,98 @@ class RacePredictor:
                 **{col: race_group.iloc[0].get(col) for col in ['class_number', 'going_id', 'pattern_id'] if col in race_group.columns}
             }
             
-            # Use strategy to select horses
-            selected_horses = self.strategy.select_horses(horses, race_data)
-            
-            if selected_horses:
-                bet_races.append(race_id)
-                bet_horses.extend(selected_horses)
+            if self.is_multi_model:
+                # Multi-model: Apply strategy to each model separately
+                race_has_selections = False
+                model_selections = {}  # Track which horses are selected by which models
+                selected_horses_set = set()  # Track unique selected horses
+                
+                for model_name in self.model_names:
+                    model_prob_col = f'win_probability_{model_name}'
+                    
+                    # Convert race group to list of horse dictionaries for this model
+                    horses = []
+                    for _, horse_row in race_group.iterrows():
+                        horse_dict = {
+                            'horse_id': str(race_id) + "_" + str(horse_row.name),
+                            'horse_name': horse_row.get('horse_name', 'Unknown'),
+                            'calibrated_probability': horse_row.get(model_prob_col, 0.0),  # Use model-specific probability
+                            'jockey': horse_row.get('jockey', 'Unknown'),
+                            'trainer': horse_row.get('trainer', 'Unknown'),
+                            'weight': horse_row.get('lbs', 0),
+                            'draw': horse_row.get('draw', 0),
+                            'age': horse_row.get('age', 0),
+                            'course_name': horse_row.get('course', 'Unknown'),
+                            'race_time': horse_row.get('time', 'Unknown'),
+                            # Add all other columns
+                            **{col: horse_row.get(col) for col in horse_row.index}
+                        }
+                        horses.append(horse_dict)
+                    
+                    # Apply strategy for this model
+                    model_selected_horses = self.strategy.select_horses(horses, race_data)
+                    if model_selected_horses:
+                        race_has_selections = True
+                        model_selections[model_name] = [horse['horse_name'] for horse in model_selected_horses]
+                        
+                        # Add selected horses to our set (avoid duplicates)
+                        for horse in model_selected_horses:
+                            selected_horses_set.add(horse['horse_name'])
+                
+                # If any model selected horses in this race, add all selected horses to results
+                if race_has_selections:
+                    bet_races.append(race_id)
+                    # Add all horses that were selected by any model
+                    for horse_name in selected_horses_set:
+                        # Find the horse in the original dataframe to get all data
+                        for _, horse_row in race_group.iterrows():
+                            if horse_row.get('horse_name') == horse_name:
+                                enriched_horse = {
+                                    'horse_id': str(race_id) + "_" + str(horse_row.name),
+                                    'horse_name': horse_row.get('horse_name', 'Unknown'),
+                                    'calibrated_probability': horse_row.get('win_probability', 0.0),  # Use ensemble probability for display
+                                    'jockey': horse_row.get('jockey', 'Unknown'),
+                                    'trainer': horse_row.get('trainer', 'Unknown'),
+                                    'weight': horse_row.get('lbs', 0),
+                                    'draw': horse_row.get('draw', 0),
+                                    'age': horse_row.get('age', 0),
+                                    'course_name': horse_row.get('course', 'Unknown'),
+                                    'race_time': horse_row.get('time', 'Unknown'),
+                                    'model_selections': model_selections,  # Store which models selected which horses
+                                    # Add all other columns including model-specific probabilities
+                                    **{col: horse_row.get(col) for col in horse_row.index}
+                                }
+                                bet_horses.append(enriched_horse)
+                                break
+            else:
+                # Single model: Use existing logic
+                horses = []
+                for _, horse_row in race_group.iterrows():
+                    horse_dict = {
+                        'horse_id': str(race_id) + "_" + str(horse_row.name),  # Create unique ID
+                        'horse_name': horse_row.get('horse_name', 'Unknown'),  # Fixed: use horse_name column
+                        'calibrated_probability': horse_row.get('win_probability', 0.0),
+                        'jockey': horse_row.get('jockey', 'Unknown'),
+                        'trainer': horse_row.get('trainer', 'Unknown'),
+                        'weight': horse_row.get('lbs', 0),
+                        'draw': horse_row.get('draw', 0),
+                        'age': horse_row.get('age', 0),
+                        'course_name': horse_row.get('course', 'Unknown'),  # Add course for strategy use
+                        'race_time': horse_row.get('time', 'Unknown'),      # Add time for strategy use
+                        # Add multi-model specific data
+                        'model_agreement': horse_row.get('model_agreement', 1.0) if self.is_multi_model else 1.0,
+                        'models_agreeing': horse_row.get('models_agreeing', 1) if self.is_multi_model else 1,
+                        # Add all other columns
+                        **{col: horse_row.get(col) for col in horse_row.index}
+                    }
+                    horses.append(horse_dict)
+                
+                # Use strategy to select horses
+                selected_horses = self.strategy.select_horses(horses, race_data)
+                
+                if selected_horses:
+                    bet_races.append(race_id)
+                    bet_horses.extend(selected_horses)
         
         # Prepare header content
         model_info = f" ({', '.join(self.model_names)})" if self.is_multi_model else f" ({self.model_name})"
@@ -747,10 +811,11 @@ class RacePredictor:
                     model_prob_col = f'win_probability_{model_name}'
                     model_prob = horse.get(model_prob_col, 0.0) * 100
                     
-                    # Use simple threshold check for individual model indicators
-                    # This shows if the individual model probability meets the basic threshold
-                    threshold = 0.20  # 20% threshold for t20win strategy
-                    indicator = "✓" if horse.get(model_prob_col, 0.0) >= threshold else "✗"
+                    # Check if this model actually selected this horse using strategy
+                    model_selections = horse.get('model_selections', {})
+                    horse_name = horse.get('horse_name', 'Unknown')
+                    is_selected = horse_name in model_selections.get(model_name, [])
+                    indicator = "✓" if is_selected else "✗"
                     
                     # Format with consistent width: 12 chars total to match header
                     line += f" | {model_prob:7.1f}% {indicator:>2}"
