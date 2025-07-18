@@ -205,6 +205,12 @@ class IncrementalEncoder:
                     jockey_14d_type_wins INTEGER,
                     jockey_14d_type_win_pct REAL,
                     
+                    -- Same-day jockey performance features
+                    jockey_day_runs INTEGER,
+                    jockey_day_wins INTEGER,
+                    jockey_day_win_pct REAL,
+                    jockey_day_avg_finish REAL,
+                    
                     -- Trainer features
                     trainer_id INTEGER,
                     trainer_total_runs INTEGER,
@@ -363,7 +369,7 @@ class IncrementalEncoder:
             # Load all historical race data up to the date (exclusive)
             query = """
             SELECT horse_id, jockey_id, trainer_id, course, going, dist_f, type, 
-                   pos, date, race_id, or_rating
+                   pos, date, race_id, or_rating, off, ran
             FROM race_data 
             WHERE date < ? 
             ORDER BY date, race_id
@@ -385,6 +391,7 @@ class IncrementalEncoder:
             jockey_id = row['jockey_id']
             trainer_id = row['trainer_id']
             win = (row['pos'] == 1 or row['pos'] == '1')
+            race_time_24h = convert_to_24h_time(row.get('off', ''))
             
             # Build horse history
             self.horse_history[horse_id].append({
@@ -397,14 +404,17 @@ class IncrementalEncoder:
                 'or_rating': row.get('or_rating')
             })
             
-            # Build jockey history
+            # Build jockey history (include additional fields for same-day tracking)
             self.jockey_history[jockey_id].append({
                 'course': row['course'],
                 'going': row['going'],
                 'dist_f': row['dist_f'],
                 'type': row['type'],
                 'win': win,
-                'date': row['date']
+                'date': row['date'],
+                'race_time_24h': race_time_24h,
+                'pos': row.get('pos'),
+                'ran': row.get('ran', 0)
             })
             
             # Build trainer history
@@ -447,7 +457,7 @@ class IncrementalEncoder:
         
         if self.dry_run:
             self.logger.info(f"[DRY RUN] Would encode {len(df)} records for {date_str}")
-            # Still simulate the encoding process without saving
+            # Still simulate the encoding process without saving but with incremental context updates
             for race_id in df['race_id'].unique():
                 race_df = df[df['race_id'] == race_id]
                 # Collect field ratings for this race
@@ -456,9 +466,9 @@ class IncrementalEncoder:
                 for _, row in race_df.iterrows():
                     # Just simulate the encoding without saving
                     features = self._encode_single_record(row, field_ratings)
+                    # Update context incrementally for accurate same-day stats
+                    self._update_single_race_context(row)
             
-            # Update historical context with this day's results
-            self._update_historical_context(df)
             return len(df)
         
         # Encode features for all races on this date
@@ -475,6 +485,10 @@ class IncrementalEncoder:
             for _, row in race_df.iterrows():
                 features = self._encode_single_record(row, field_ratings)
                 encoded_features.append(features)
+                
+                # Update historical context immediately after encoding each race
+                # This ensures same-day jockey stats work correctly for later races
+                self._update_single_race_context(row)
         
         # Save encoded features to database
         if encoded_features:
@@ -482,9 +496,6 @@ class IncrementalEncoder:
             with sqlite3.connect(self.db_path) as conn:
                 encoded_df.to_sql(self.encoded_table, conn, if_exists='append', index=False)
                 conn.commit()
-        
-        # Update historical context with this day's results
-        self._update_historical_context(df)
         
         self.logger.info(f"✓ Encoded {len(encoded_features)} records for {date_str}")
         return len(encoded_features)
@@ -573,6 +584,7 @@ class IncrementalEncoder:
         # Calculate historical statistics
         features.update(self._calculate_horse_stats(horse_records, course, going, dist_f, race_date))
         features.update(self._calculate_jockey_stats(jockey_records, course, going, dist_f, race_type, race_date))
+        features.update(self._calculate_jockey_day_stats(jockey_id, race_date, row.get('off_time_24h', '')))
         features.update(self._calculate_trainer_stats(trainer_records, course, going, dist_f, race_type, race_date))
         features.update(self._calculate_horse_rating_features(horse_records, race_date, field_ratings))
         
@@ -856,6 +868,49 @@ class IncrementalEncoder:
             'jockey_14d_type_win_pct': (recent_type_wins / recent_type_runs * 100) if recent_type_runs > 0 else -1.0,
         }
 
+    def _calculate_jockey_day_stats(self, jockey_id: int, race_date: str, race_time_24h: str) -> Dict:
+        """Calculate jockey's performance in earlier races on the same day."""
+        
+        # Get all races for this jockey on this date with earlier times
+        same_day_earlier_races = [
+            r for r in self.jockey_history[jockey_id] 
+            if r['date'] == race_date and r.get('race_time_24h', '') < race_time_24h
+        ]
+        
+        if not same_day_earlier_races:
+            return {
+                'jockey_day_runs': 0,
+                'jockey_day_wins': 0,
+                'jockey_day_win_pct': -1.0,
+                'jockey_day_avg_finish': -1.0
+            }
+        
+        runs = len(same_day_earlier_races)
+        wins = sum(1 for r in same_day_earlier_races if r['win'])
+        
+        # Calculate average finish position (treat non-finishers as finishing last)
+        positions = []
+        for r in same_day_earlier_races:
+            pos = r.get('pos')
+            ran = r.get('ran', 0)  # Number of horses that ran in the race
+            
+            if pos is not None and str(pos).isdigit():
+                # Normal finishing position
+                positions.append(int(pos))
+            elif pos is not None and ran > 0:
+                # Non-finisher (PU, F, UR, etc.) - treat as finishing last
+                positions.append(ran)
+            # If we can't determine position or field size, skip this race
+        
+        avg_finish = sum(positions) / len(positions) if positions else -1.0
+        
+        return {
+            'jockey_day_runs': runs,
+            'jockey_day_wins': wins,
+            'jockey_day_win_pct': (wins / runs * 100) if runs > 0 else -1.0,
+            'jockey_day_avg_finish': avg_finish
+        }
+
     def _calculate_trainer_stats(self, records: List[Dict], course: str, going: str, dist_f: str, race_type: str, race_date: str) -> Dict:
         """Calculate trainer historical statistics."""
         total_runs = len(records)
@@ -1071,8 +1126,9 @@ class IncrementalEncoder:
             jockey_id = row['jockey_id']
             trainer_id = row['trainer_id']
             win = (row['pos'] == 1 or row['pos'] == '1')
+            race_time_24h = row.get('off_time_24h', convert_to_24h_time(row.get('off', '')))
             
-            record = {
+            horse_record = {
                 'course': row['course'],
                 'going': row['going'],
                 'dist_f': row['dist_f'],
@@ -1082,9 +1138,75 @@ class IncrementalEncoder:
                 'or_rating': row.get('or_rating')
             }
             
-            self.horse_history[horse_id].append(record)
-            self.jockey_history[jockey_id].append(record)
-            self.trainer_history[trainer_id].append(record)
+            jockey_record = {
+                'course': row['course'],
+                'going': row['going'],
+                'dist_f': row['dist_f'],
+                'type': row['type'],
+                'win': win,
+                'date': row['date'],
+                'race_time_24h': race_time_24h,
+                'pos': row.get('pos'),
+                'ran': row.get('ran', 0)
+            }
+            
+            trainer_record = {
+                'course': row['course'],
+                'going': row['going'],
+                'dist_f': row['dist_f'],
+                'type': row['type'],
+                'win': win,
+                'date': row['date'],
+                'or_rating': row.get('or_rating')
+            }
+            
+            self.horse_history[horse_id].append(horse_record)
+            self.jockey_history[jockey_id].append(jockey_record)
+            self.trainer_history[trainer_id].append(trainer_record)
+
+    def _update_single_race_context(self, row: pd.Series):
+        """Update historical context with a single race result immediately after encoding."""
+        horse_id = row['horse_id']
+        jockey_id = row['jockey_id']
+        trainer_id = row['trainer_id']
+        win = (row['pos'] == 1 or row['pos'] == '1')
+        race_time_24h = row.get('off_time_24h', convert_to_24h_time(row.get('off', '')))
+        
+        horse_record = {
+            'course': row['course'],
+            'going': row['going'],
+            'dist_f': row['dist_f'],
+            'type': row['type'],
+            'win': win,
+            'date': row['date'],
+            'or_rating': row.get('or_rating')
+        }
+        
+        jockey_record = {
+            'course': row['course'],
+            'going': row['going'],
+            'dist_f': row['dist_f'],
+            'type': row['type'],
+            'win': win,
+            'date': row['date'],
+            'race_time_24h': race_time_24h,
+            'pos': row.get('pos'),
+            'ran': row.get('ran', 0)
+        }
+        
+        trainer_record = {
+            'course': row['course'],
+            'going': row['going'],
+            'dist_f': row['dist_f'],
+            'type': row['type'],
+            'win': win,
+            'date': row['date'],
+            'or_rating': row.get('or_rating')
+        }
+        
+        self.horse_history[horse_id].append(horse_record)
+        self.jockey_history[jockey_id].append(jockey_record)
+        self.trainer_history[trainer_id].append(trainer_record)
 
     def run_incremental_encoding(self):
         """Main method to run incremental encoding."""
