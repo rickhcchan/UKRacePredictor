@@ -2,7 +2,7 @@
 /*.py
 
 # Model files
-models/
+/models/
 
 # Data files
 data/
