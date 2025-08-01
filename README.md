@@ -16,6 +16,7 @@ The UK Race Predictor is a complete end-to-end machine learning pipeline that:
 - **Trains** LightGBM models with probability calibration
 - **Predicts** race outcomes with calibrated win probabilities
 - **Supports** multiple model versions and betting strategies
+- **🤖 NEW: AI-Enhanced Analysis** using WTG.AI.Prompts cargowise domain methodology for systematic race evaluation
 
 ## 🚀 Quick Start
 
@@ -289,6 +290,12 @@ python scripts/predict_races.py --model win* --odds
 
 # Custom betting strategy
 python scripts/predict_races.py --model win,top3 --strategy default
+
+# AI-enhanced analysis (NEW)
+python scripts/predict_races.py --model win* --ai
+
+# Combine all features
+python scripts/predict_races.py --model win,top3 --odds --ai --strategy default
 ```
 
 #### Output Formats (NEW)
@@ -305,6 +312,78 @@ python scripts/predict_races.py --model win,top3 --strategy default
 - **Wildcard expansion**: `win*` finds `win, win_v2, win_v3` etc.
 - **Union strategy**: Uses maximum probability across all selected models
 - **Individual tracking**: Shows each model's contribution to final recommendation
+
+## 🤖 AI-Enhanced Race Analysis (NEW)
+
+The UK Race Predictor now includes AI-powered analysis using WTG.AI.Prompts cargowise domain methodology, applying supply chain logistics and optimization principles to horse racing prediction.
+
+### 🎯 Features
+
+- **Systematic Analysis**: Applies cargowise logistics methodology to race evaluation
+- **Performance Supply Chain**: Analyzes horse form trends using supply chain reliability principles  
+- **Competitive Positioning**: Uses optimization algorithms for field strength assessment
+- **Risk-Return Evaluation**: Applies cargo routing efficiency metrics to betting decisions
+
+### 📦 Setup
+
+The AI integration is built-in and requires no additional dependencies:
+
+```bash
+# AI analysis is enabled by default
+python scripts/predict_races.py --dry-run
+
+# Explicitly enable/disable AI analysis
+python scripts/predict_races.py --ai --dry-run
+python scripts/predict_races.py --no-ai --dry-run
+```
+
+### 🚀 Usage
+
+```bash
+# Basic AI-enhanced predictions
+python scripts/predict_races.py --ai
+
+# AI analysis with live odds
+python scripts/predict_races.py --ai --odds
+
+# AI analysis with multi-model predictions  
+python scripts/predict_races.py --model win,top3 --ai
+
+# Test AI integration
+python scripts/test_ai_integration.py
+```
+
+### 📊 Sample AI Output
+
+```
+📍 Ascot - 15:30 (12 horses total)
+
+🤖 AI Analysis (Cargowise Methodology Applied)
+
+**Race Logistics Assessment:**
+- Course: Ascot  
+- Field Optimization: 12 horses (Manageable field size)
+- Race Type: Handicap
+
+**Performance Supply Chain Analysis:**
+Based on cargowise systematic evaluation principles:
+
+1. **Efficiency Metrics**: Top contenders show consistent delivery patterns
+2. **Reliability Factors**: Recent form trends indicate stable performance corridors
+3. **Environmental Adaptability**: Course and distance suitability analysis completed
+4. **Competitive Positioning**: Relative strength assessment within current field composition
+5. **Risk-Return Evaluation**: Probability distributions aligned with market efficiency
+
+**Strategic Insights:**
+- Apply systematic risk management protocols
+- Consider field dynamics in position sizing  
+- Monitor real-time market adjustments
+- Maintain portfolio balance principles
+```
+
+### 📝 Documentation
+
+For detailed information about the AI integration, see [docs/AI_INTEGRATION.md](docs/AI_INTEGRATION.md).
 
 ## 🐎 Live Odds Integration
 
@@ -350,6 +429,27 @@ python scripts/predict_races.py --model win,top3 --odds
 
 # Multi-model script with odds
 python scripts/predict_races_multi.py --models win_v2,top3_v2 --odds
+
+# With AI analysis (new)
+python scripts/predict_races.py --ai --dry-run
+
+# Disable AI analysis
+python scripts/predict_races.py --no-ai --dry-run
+```
+
+### 🤖 NEW: AI-Enhanced Analysis
+
+The system now includes AI-powered race analysis using WTG.AI.Prompts cargowise domain methodology:
+
+```bash
+# Default: AI analysis enabled
+python scripts/predict_races.py --dry-run
+
+# Combine AI with odds fetching
+python scripts/predict_races.py --ai --odds --dry-run
+
+# AI analysis with multi-model predictions
+python scripts/predict_races.py --model win,top3 --ai --dry-run
 ```
 
 ### 📊 Sample Output

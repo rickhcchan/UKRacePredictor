@@ -69,21 +69,32 @@ warnings.filterwarnings('ignore', category=FutureWarning, message='.*DataFrame c
 # Add the scripts directory to path for imports
 script_dir = Path(__file__).parent
 sys.path.append(str(script_dir))
+sys.path.append(str(script_dir.parent))  # Add parent directory for prompts module
 
 from common import setup_logging, convert_to_24h_time
 from model_config import load_model_config
 from strategy_factory import StrategyFactory
 from odds_fetcher import find_best_horse_match
 
+# Import AI integration functionality
+try:
+    from prompts.ai_integration import ai_integration
+    AI_INTEGRATION_AVAILABLE = True
+except ImportError:
+    AI_INTEGRATION_AVAILABLE = False
+    print("⚠️ AI integration not available - cargowise prompt analysis disabled")
+
 
 class RacePredictor:
-    def __init__(self, date: str = None, dry_run: bool = False, model_names: List[str] = None, strategy_name: str = "default", threshold: float = 0.20, fetch_odds: bool = False):
+    def __init__(self, date: str = None, dry_run: bool = False, model_names: List[str] = None, strategy_name: str = "default", threshold: float = 0.20, fetch_odds: bool = False, enable_ai: bool = True):
         self.target_date = date or datetime.now().strftime('%Y-%m-%d')
         self.dry_run = dry_run
         self.model_names = model_names or ["default"]
         self.strategy_name = strategy_name
         self.threshold = threshold
         self.fetch_odds = fetch_odds and ODDS_AVAILABLE
+        self.enable_ai = enable_ai and AI_INTEGRATION_AVAILABLE
+        self.show_odds = self.fetch_odds  # Add this property
         self.logger = setup_logging()
         
         # Support backward compatibility - if single model passed as string
@@ -92,6 +103,13 @@ class RacePredictor:
         
         # Determine if this is single or multi-model mode
         self.is_multi_model = len(self.model_names) > 1
+        self.model_name = self.model_names[0] if not self.is_multi_model else "multi"  # For backward compatibility
+        
+        # Initialize AI integration if available
+        if self.enable_ai:
+            self.logger.info("AI integration enabled with cargowise domain prompts")
+        else:
+            self.logger.info("AI integration disabled")
         
         # Load model configurations
         self.model_configs = {}
@@ -750,6 +768,10 @@ class RacePredictor:
                 # Show race header first
                 print(f"\n📍 {horse.get('course', 'Unknown')} - {horse.get('time', 'Unknown')} ({total_horses_in_race} horses total)")
                 
+                # Add AI analysis for this race if enabled
+                if self.enable_ai:
+                    self._display_ai_analysis(horse, df, race_key)
+                
                 # Fetch odds for this race if enabled
                 if self.fetch_odds:
                     course = horse.get('course', '')
@@ -1210,6 +1232,46 @@ class RacePredictor:
         if self.is_multi_model:
             self.logger.info(f"Multi-model predictions saved with {len(self.model_names)} models: {', '.join(self.model_names)}")
 
+    def _display_ai_analysis(self, current_horse: pd.Series, full_df: pd.DataFrame, race_key: str):
+        """Display AI analysis for the current race using cargowise domain prompts"""
+        try:
+            # Get all horses in this race
+            race_id = current_horse['race_id']
+            race_horses = full_df[full_df['race_id'] == race_id]
+            
+            # Prepare race data for AI analysis
+            race_data = {
+                'course': current_horse.get('course', 'Unknown'),
+                'time': current_horse.get('time', 'Unknown'),
+                'distance': race_horses.iloc[0].get('dist_f', 'Unknown'),
+                'going': race_horses.iloc[0].get('going_id', 'Unknown'),
+                'race_type': race_horses.iloc[0].get('type_id', 'Unknown'),
+                'field_size': len(race_horses),
+                'horses': []
+            }
+            
+            # Add horse information
+            for _, horse_row in race_horses.iterrows():
+                horse_info = {
+                    'name': horse_row.get('horse_name', 'Unknown'),
+                    'age': horse_row.get('age', 'Unknown'),
+                    'weight': horse_row.get('lbs', 'Unknown'),
+                    'jockey': horse_row.get('jockey', 'Unknown'),
+                    'trainer': horse_row.get('trainer', 'Unknown'),
+                    'recent_form': 'Recent form data'  # Placeholder
+                }
+                race_data['horses'].append(horse_info)
+            
+            # Get AI analysis
+            analysis = ai_integration.analyze_race_data(race_data)
+            if analysis:
+                print(f"\n{analysis}")
+                print()  # Add spacing after analysis
+                
+        except Exception as e:
+            self.logger.error(f"Error displaying AI analysis: {e}")
+            # Don't let AI analysis errors break the main prediction flow
+
     def run_prediction(self):
         """Main method to run race prediction."""
         self.logger.info(f"Starting race prediction for {self.target_date}")
@@ -1352,6 +1414,13 @@ def main():
     parser.add_argument('--odds', 
                        action='store_true',
                        help='Fetch and display live odds from attheraces.com (requires playwright)')
+    parser.add_argument('--ai', 
+                       action='store_true',
+                       default=True,
+                       help='Enable AI analysis using cargowise domain prompts (default: enabled)')
+    parser.add_argument('--no-ai', 
+                       action='store_true',
+                       help='Disable AI analysis')
     
     args = parser.parse_args()
     
@@ -1374,12 +1443,19 @@ def main():
         if args.odds and not ODDS_AVAILABLE:
             print("⚠️ Warning: Odds fetching requested but playwright not available. Install with: pip install playwright && playwright install chromium")
         
+        # Determine AI enablement
+        enable_ai = args.ai and not args.no_ai
+        if enable_ai and not AI_INTEGRATION_AVAILABLE:
+            print("⚠️ Warning: AI analysis requested but cargowise prompts not available")
+            enable_ai = False
+        
         predictor = RacePredictor(
             date=args.date,
             dry_run=args.dry_run,
             model_names=model_names,  # Pass list of model names
             strategy_name=args.strategy,
-            fetch_odds=args.odds
+            fetch_odds=args.odds,
+            enable_ai=enable_ai
         )
         
         success = predictor.run_prediction()

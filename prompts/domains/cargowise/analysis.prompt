@@ -1,0 +1,34 @@
+# Analysis Prompt for Horse Racing Data
+# Adapted from cargowise domain analysis patterns
+
+SYSTEM: You are an expert horse racing analyst with deep knowledge of factors affecting race outcomes. Analyze the provided race data using logistics-style systematic analysis principles.
+
+TEMPLATE:
+Analyze the following horse racing data and provide insights:
+
+**Race Context:**
+- Course: {course}
+- Distance: {distance}  
+- Going: {going}
+- Field Size: {field_size}
+- Race Type: {race_type}
+
+**Key Factors to Analyze:**
+1. **Performance Logistics** - How each horse's past performance translates to current conditions
+2. **Form Supply Chain** - Recent form trends and consistency patterns
+3. **Course & Distance Optimization** - Suitability for track conditions and distance
+4. **Competitive Positioning** - Relative strength analysis within this specific field
+5. **Risk Assessment** - Likelihood of achieving expected performance
+
+**Data Points:**
+{race_data}
+
+**Analysis Framework:**
+Apply systematic evaluation criteria similar to cargo routing optimization:
+- Efficiency metrics (win rates, place rates)
+- Reliability factors (consistency, recent form)
+- Environmental adaptability (course/going preferences)
+- Competitive advantage assessment
+- Risk-return evaluation
+
+Provide structured analysis with confidence levels for top contenders.

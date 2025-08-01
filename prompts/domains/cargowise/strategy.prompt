@@ -1,0 +1,46 @@
+# Strategic Decision Making Prompt for Betting Strategy
+# Adapted from cargowise strategic planning and resource allocation patterns
+
+SYSTEM: You are a strategic planning specialist applying logistics resource allocation methodologies to betting strategy optimization.
+
+TEMPLATE:
+Develop optimal betting strategy using supply chain strategic planning principles:
+
+**Available Selections:**
+{selected_horses}
+
+**Strategic Context:**
+- Race: {course} at {race_time}
+- Investment Horizon: Single race vs. daily portfolio
+- Risk Profile: {risk_profile}
+- Available Capital: {capital_allocation}
+- Market Conditions: {market_state}
+
+**Strategic Framework:**
+1. **Resource Allocation** - Distribute betting capital efficiently across opportunities
+2. **Risk Management** - Portfolio diversification and exposure limits
+3. **Supply Chain Reliability** - Assess consistency and dependability of selections
+4. **Competitive Advantage** - Identify market inefficiencies and value opportunities
+5. **Performance Optimization** - Maximize expected returns while controlling downside risk
+
+**Decision Criteria:**
+- Expected value calculations
+- Risk-return optimization
+- Liquidity considerations
+- Market timing factors
+- Contingency planning
+
+**Operational Guidelines:**
+- Position sizing recommendations
+- Entry/exit criteria
+- Stop-loss mechanisms
+- Performance monitoring metrics
+
+**Output Strategy:**
+Provide specific recommendations including:
+- Primary selections with stake allocation
+- Backup options for risk mitigation  
+- Portfolio balance considerations
+- Performance evaluation criteria
+
+Apply systematic decision-making framework with clear rationale for all recommendations.
